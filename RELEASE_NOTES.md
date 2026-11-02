@@ -1,3 +1,11 @@
+# BlindPilot 0.52.7
+
+Your old conversations can be read the way a document is read, and a conversation BlindPilot cannot read now says so.
+
+- **A conversation in a web view:** Ctrl+Enter (or Shift+Enter) in Recent Conversations or Hermes Conversations reads the selected conversation in an accessible web view. The conversation title is the one heading, each exchange is a heading under it, so you can navigate by heading instead of hearing one long line. The reading cursor goes into the conversation when it opens, and Escape closes it from inside the conversation. Nothing a conversation names is fetched: a picture in an answer becomes a link, and a link opens in your browser only when you ask for it. Enter still opens the conversation in a new tab, the way the Open button does, and so does a double-click.
+- **Every folder, by default:** Recent Conversations lists conversations from every folder, and remembers a narrower choice if you make one. A conversation is filed under the directory it ran in, and that directory is not always the one BlindPilot was started from, so scoping the list to one folder hid conversations you knew you had.
+- **History source status:** when a conversation store cannot be read - locked by another program, damaged, or of a version BlindPilot does not know - Recent Conversations says so instead of showing an empty list, names the program and the problem, and says what to do about it. The explanation sits in a box called History source status, carries no path from your disk, and the conversations that could be read are still listed. Reload reads the stores again.
+
 # BlindPilot 0.52.6
 
 A performance fix for agent mode on Windows, from a CPU audit. Two background loops ran far more often than they needed to:

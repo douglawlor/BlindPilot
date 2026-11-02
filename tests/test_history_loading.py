@@ -32,6 +32,10 @@ def test_slow_history_opens_immediately_and_ignores_the_previous_scope(frame, mo
             return [folder]
         return [all_folders]
 
+    # This folder, so the first scan is the slow one. The list shows every
+    # folder by default now, and the point of this test is what happens while
+    # a slow scan is still running.
+    monkeypatch.setattr(app, "_load_config", lambda: {"history_scope": "folder"})
     monkeypatch.setattr(app, "list_history", scan)
     monkeypatch.setattr(app, "announce", lambda *_a, **_k: None)
     dialog = app.HistoryDialog(frame, "claude", ".")
@@ -73,10 +77,12 @@ def test_history_loading_failure_is_spoken_and_leaves_no_openable_row(frame, mon
     monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
     dialog = app.HistoryDialog(frame, "claude", ".")
     try:
-        _wait(lambda: any("History unavailable" in text for text in spoken))
+        _wait(lambda: any("Could not load conversations" in text for text in spoken))
         assert dialog.list_box.GetCount() == 0
         assert not dialog.FindWindow(wx.ID_OK).IsEnabled()
-        assert "History unavailable" in dialog.summary.GetLabel()
+        assert "Could not load conversations" in dialog.summary.GetLabel()
+        assert "History unavailable" not in dialog.source_status.GetValue()
+        assert "Reload" in dialog.source_status.GetValue()
     finally:
         dialog._preview_timer.Stop()
         dialog.Destroy()

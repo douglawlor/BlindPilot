@@ -349,6 +349,8 @@ def wsl_sqlite_query(sql: str, params: "Sequence" = ()) -> "list[dict]":
     interpolated into a shell command, so no value is ever quoted into code.
     Rows come back as JSON, which is why the caller gets plain dicts.
     """
+    from history_status import _bridge_error, _read_error, _report
+
     launcher = wsl_exe()
     store = wsl_state_db()
     if not launcher or not store:
@@ -374,15 +376,21 @@ def wsl_sqlite_query(sql: str, params: "Sequence" = ()) -> "list[dict]":
             **_text_output_kwargs(),
             **_no_window_kwargs(),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _read_error(exc, "WSL history source")
         return []
     if proc.returncode != 0:
+        _bridge_error(proc.stderr)
         return []
     try:
         rows = json.loads(proc.stdout or "[]")
-    except ValueError:
+    except ValueError as exc:
+        _read_error(exc, "WSL history source")
         return []
-    return rows if isinstance(rows, list) else []
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        _report("unsupported", "WSL history source")
+        return []
+    return rows
 
 
 def windows_path_to_wsl(path: str) -> str:

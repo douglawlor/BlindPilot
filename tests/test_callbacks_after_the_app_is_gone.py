@@ -11,6 +11,7 @@ preview loads.
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -79,6 +80,8 @@ def test_a_history_load_finishing_after_the_app_is_gone_is_not_posted(monkeypatc
     dialog._selected_cwd = lambda: None
     dialog._refresh = lambda: None
     dialog._history_loaded = lambda *args: None
+    dialog.source_status = SimpleNamespace(ChangeValue=lambda _text: None, Hide=lambda: None)
+    dialog.Layout = lambda: None
 
     app.HistoryDialog._reload(dialog)
 

@@ -587,10 +587,12 @@ def muse_index_db() -> Optional[Path]:
     in, so this answers None and the history reader queries through the
     bridge.
     """
+    from history_status import _source_is_file
+
     for data in _muse_data_dirs():
         path = data / "session-index.db"
         try:
-            if path.is_file():
+            if _source_is_file(path):
                 return path
         except OSError:
             continue
@@ -598,7 +600,7 @@ def muse_index_db() -> Optional[Path]:
     if home:
         path = Path(home) / "session-index.db"
         try:
-            if path.is_file():
+            if _source_is_file(path):
                 return path
         except OSError:
             pass
@@ -676,6 +678,8 @@ def wsl_muse_sqlite_query(sql: str, params: Sequence = ()) -> list[dict]:
     store may be in WAL mode, which SQLite cannot read over the
     \\\\wsl.localhost share, and no value is ever quoted into shell code.
     """
+    from history_status import _bridge_error, _read_error, _report
+
     launcher = wsl_exe()
     store = wsl_muse_index_db()
     if not launcher or not store:
@@ -701,15 +705,21 @@ def wsl_muse_sqlite_query(sql: str, params: Sequence = ()) -> list[dict]:
             **_text_output_kwargs(),
             **_no_window_kwargs(),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _read_error(exc, "WSL history source")
         return []
     if proc.returncode != 0:
+        _bridge_error(proc.stderr)
         return []
     try:
         rows = json.loads(proc.stdout or "[]")
-    except ValueError:
+    except ValueError as exc:
+        _read_error(exc, "WSL history source")
         return []
-    return rows if isinstance(rows, list) else []
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        _report("unsupported", "WSL history source")
+        return []
+    return rows
 
 
 # How much of a WSL-side session log is fetched. A transcript past this is a
@@ -728,15 +738,19 @@ def muse_session_log_text(path: str) -> str:
     session index, which a hostile entry could poison with quotes and
     substitutions.
     """
+    from history_status import _bridge_error, _read_error, _report, _source_is_file
+
     if not path:
         return ""
     try:
-        if Path(path).is_file():
+        if _source_is_file(Path(path)):
             return Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        _read_error(exc, "history transcript")
         return ""
     launcher = wsl_exe()
     if not launcher:
+        _report("missing", "history transcript")
         return ""
     try:
         proc = subprocess.run(
@@ -747,9 +761,11 @@ def muse_session_log_text(path: str) -> str:
             **_text_output_kwargs(),
             **_no_window_kwargs(),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _read_error(exc, "WSL history transcript")
         return ""
     if proc.returncode != 0:
+        _bridge_error(proc.stderr)
         return ""
     return proc.stdout or ""
 
@@ -770,13 +786,19 @@ def parse_muse_transcript(text: str) -> list[tuple[str, str]]:
     source is ``user_steer``. Everything else -- tool calls, reasoning,
     reminders, retained frames -- is Muse's bookkeeping, not the conversation.
     """
+    from history_status import _read_error, _report
+
     turns: list[list[str]] = []
     for line in (text or "").splitlines():
         if '"run"' not in line and "user_steer" not in line:
             continue
         try:
             record = json.loads(line)
-        except ValueError:
+        except ValueError as exc:
+            _read_error(exc, "history transcript")
+            continue
+        if not isinstance(record, dict):
+            _report("unsupported", "history transcript")
             continue
         payload = record.get("payload")
         if not isinstance(payload, dict):

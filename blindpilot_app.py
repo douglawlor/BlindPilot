@@ -32,6 +32,7 @@ from __future__ import annotations
 import bisect
 import functools
 import hashlib
+import html
 import importlib.util
 import json
 import logging
@@ -173,6 +174,7 @@ from markdown_rows import (
     Row,
     SentenceStreamer,
     _MD,
+    _MD_CONVERSATION,
     _strip_noise,
     parse_response,
     reassemble,
@@ -182,8 +184,10 @@ from markdown_rows import (
 from session_history import (
     HistoryEntry,
     HistoryTurn,
+    _hermes_db_path,
     claude_project_slug,
     describe_age,
+    history_diagnostics,
     list_history,
     load_turns,
     make_title,
@@ -356,7 +360,7 @@ APP_NAME = "BlindPilot"
 # share a left edge.
 PAD = 8
 PAD_DIALOG = 12
-APP_VERSION = "0.52.6"
+APP_VERSION = "0.52.7"
 APP_MODE_AGENT = "agent"
 APP_MODE_CHAT = "chat"
 APP_MODE_LABELS = {APP_MODE_AGENT: "Agent", APP_MODE_CHAT: "Chat"}
@@ -6021,6 +6025,206 @@ class ReadView(wx.Dialog):
         event.Skip()
 
 
+class ConversationWebViewDialog(wx.Dialog):
+    """Accessible web view for a full conversation.
+
+    Uses a modern native browser to render the conversation
+    as HTML so it reads correctly in NVDA and JAWS. The conversation is
+    loaded from the backend's transcript and rendered with Markdown.
+
+    Where the machine has no modern web view backend, the conversation is
+    shown as plain text in a read-only box
+    rather than not being shown at all.
+    """
+
+    def __init__(
+        self,
+        parent: wx.Window,
+        entry: HistoryEntry,
+        title: str,
+        missing: str = "No messages found in this conversation.",
+    ):
+        super().__init__(
+            parent,
+            title=title,
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+
+        self._entry = entry
+        self._title = title
+        self._missing = missing
+        # The browser adapter is imported only when a conversation is opened.
+        self._webview: Optional[Any] = None
+        self._text: Optional[wx.TextCtrl] = None
+        # Set when the window is closed, so a load that was already on its way
+        # does not speak for a window that is no longer there.
+        self._closed = False
+
+        view = self._build_view()
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(view, 1, wx.EXPAND | wx.ALL, self.FromDIP(PAD_DIALOG))
+
+        self.source_status = wx.TextCtrl(
+            self, style=wx.TE_MULTILINE | wx.TE_READONLY, name="History source status"
+        )
+        self.source_status.SetMinSize(self.FromDIP(wx.Size(560, 85)))
+        self.source_status.Hide()
+        sizer.Add(self.source_status, 0, wx.EXPAND | wx.ALL, self.FromDIP(PAD_DIALOG))
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        close_button = wx.Button(self, wx.ID_CANCEL, "Close")
+        buttons.Add(close_button, 0, wx.LEFT, self.FromDIP(8))
+        sizer.Add(buttons, 0, wx.ALIGN_RIGHT | wx.ALL, self.FromDIP(PAD_DIALOG))
+
+        self.SetSizerAndFit(sizer)
+        self.SetClientSize(self.FromDIP(wx.Size(800, 600)))
+
+        self.Bind(wx.EVT_BUTTON, lambda _e: self._close(), id=wx.ID_CANCEL)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        self.Bind(wx.EVT_CLOSE, lambda _e: self._close())
+
+        self.CentreOnParent()
+        _call_after_alive(self._load_conversation)
+
+    def _build_view(self) -> wx.Window:
+        """Build a modern browser or its readable native text fallback."""
+        from conversation_webview import ConversationWebView
+
+        self._webview = ConversationWebView(self, title=self._title, on_close=self._close)
+        control = self._webview.control
+        # The dialog caption already says which conversation this is. The
+        # control inside it is named for what it is, so the title is not said
+        # three times over.
+        control.SetName("Conversation")
+        control.SetMinSize(self.FromDIP(wx.Size(760, 480)))
+        return control
+
+    def _load_conversation(self) -> None:
+        """Read the conversation off the GUI thread, then show it.
+
+        A transcript can be tens of megabytes, and reading one on the GUI
+        thread freezes the modal loop, and the screen reader with it.
+        """
+        if self._closed or not self:
+            # The window was closed before the load began. Saying "Loading
+            # conversation" now would be the last thing a window nobody can
+            # reach has to say.
+            return
+        announce("Loading conversation")
+
+        def work() -> None:
+            try:
+                with history_diagnostics() as issues:
+                    turns = load_turns(self._entry)
+                error = "\n".join(issue.message for issue in issues)
+            except Exception:  # noqa: BLE001 - a store that cannot be read
+                turns, error = [], "This conversation could not be read."
+                logging.getLogger("blindpilot").warning(
+                    "could not read a conversation", exc_info=True
+                )
+            _call_after_alive(self._show_conversation, turns, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_conversation(self, turns: List[HistoryTurn], error: str) -> None:
+        if self._closed or not self:
+            return
+        self.source_status.ChangeValue(error)
+        self.source_status.Show(bool(error))
+        self.Layout()
+        if error:
+            if not turns:
+                self._show_text(error)
+                announce(f"Error: {error}")
+                return
+        if not turns:
+            self._show_text(self._missing)
+            announce(self._missing)
+            return
+        messages = sum(1 for turn in turns for part in (turn.prompt, turn.response) if part.strip())
+        view = self._webview if self._webview is not None and self._webview.using_webview else None
+        if view is not None:
+            view.set_content(self._conversation_html(turns))
+        else:
+            self._show_text(self._conversation_text(turns))
+        announce(f"Conversation loaded: {messages} messages." + (f" {error}" if error else ""))
+        if view is not None:
+            # The focus call is what puts the reading cursor in the
+            # conversation. The native control taking focus is not enough:
+            # without it the reader is left with a dialog and nothing in it.
+            view.focus()
+
+    def _conversation_html(self, turns: List[HistoryTurn]) -> str:
+        """The conversation as a document fragment.
+
+        The title is the one heading of level one, so the reader can get to
+        the conversation by heading. Each exchange is a level two heading
+        under it, numbered, so two exchanges that began alike can be told
+        apart in a list of headings.
+        """
+        parts = [f"<h1>{html.escape(self._title)}</h1>"]
+        speaker = html.escape(backend_label(self._entry.backend))
+        for number, turn in enumerate(turns, start=1):
+            if turn.prompt.strip():
+                parts.append(
+                    f"<article><h2>You, exchange {number}</h2>"
+                    f"{_MD_CONVERSATION.render(turn.prompt)}</article>"
+                )
+            if turn.response.strip():
+                parts.append(
+                    f"<article><h2>{speaker}, exchange {number}</h2>"
+                    f"{_MD_CONVERSATION.render(turn.response)}</article>"
+                )
+        return "\n".join(parts)
+
+    def _conversation_text(self, turns: List[HistoryTurn]) -> str:
+        """The conversation as plain text, for a machine with no web view."""
+        parts: list[str] = []
+        speaker = backend_label(self._entry.backend)
+        for number, turn in enumerate(turns, start=1):
+            if turn.prompt.strip():
+                parts.append(f"You, exchange {number}\n{turn.prompt.strip()}")
+            if turn.response.strip():
+                parts.append(f"{speaker}, exchange {number}\n{turn.response.strip()}")
+        return "\n\n".join(parts)
+
+    def _show_text(self, text: str) -> None:
+        """Show the conversation as plain text, where there is no web view."""
+        control = self._plain_control()
+        if control is None:
+            if self._webview is not None:
+                self._webview.set_content(f"<p>{html.escape(text)}</p>")
+                self._webview.focus()
+            return
+        control.SetValue(text)
+        control.SetFocus()
+
+    def _plain_control(self) -> Optional[wx.TextCtrl]:
+        """The box the text is shown in, when there is no web view."""
+        if self._text is not None:
+            return self._text
+        if self._webview is not None and not self._webview.using_webview:
+            return self._webview.fallback
+        return None
+
+    def _close(self) -> None:
+        """Close the dialog, whether Escape or the button asked for it."""
+        self.EndModal(wx.ID_CANCEL)
+
+    def _on_key(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self._close()
+            return
+        event.Skip()
+
+    def Destroy(self) -> bool:  # type: ignore[override]
+        # A load already on its way has to know the window is gone: it would
+        # otherwise speak for a window nobody can reach.
+        self._closed = True
+        return super().Destroy()
+
+
 class MuseAiDialog(wx.Dialog):
     """Native readers for Muse.ai account data and explicit one-action approvals."""
 
@@ -7982,7 +8186,9 @@ class HistoryDialog(wx.Dialog):
     that reliably tells two of them apart when they are read out. Typing in the
     filter narrows the list by title; the backend and folder pickers widen it.
 
-    Enter (or Open) resumes the selected conversation in a new tab. Esc cancels.
+    Enter opens the selected conversation in a new tab, the way the Open button
+    does. Ctrl+Enter (or Shift+Enter) reads it in an accessible web view
+    instead. Esc cancels.
     """
 
     def __init__(self, parent: wx.Window, backend: str, cwd: str):
@@ -7998,6 +8204,7 @@ class HistoryDialog(wx.Dialog):
         self._load_serial = 0
         self._loading = False
         self._load_error = ""
+        self._source_warning = ""
 
         backend_label_text = wx.StaticText(self, label="&Backend:")
         self._backend_values = [""] + list(BACKEND_IDS)
@@ -8012,8 +8219,18 @@ class HistoryDialog(wx.Dialog):
         scope_label = wx.StaticText(self, label="&Show:")
         self.scope_picker = wx.Choice(self, choices=list(_HISTORY_SCOPE_LABELS))
         self.scope_picker.SetName("Show")
-        self.scope_picker.SetSelection(0)
-        self.scope_picker.Bind(wx.EVT_CHOICE, lambda _e: self._reload())
+        # Every folder, unless the user has said otherwise. A conversation is
+        # filed under the directory it ran in, and which directory that is
+        # depends on where the application was started from: the source tree
+        # when it is run from source, the install folder otherwise. Scoping
+        # the list to one of those hid conversations the user knew they had.
+        saved_scope = _load_config().get("history_scope")
+        self.scope_picker.SetSelection(
+            _HISTORY_SCOPES.index(saved_scope)
+            if saved_scope in _HISTORY_SCOPES
+            else _HISTORY_SCOPES.index("all")
+        )
+        self.scope_picker.Bind(wx.EVT_CHOICE, lambda _e: self._on_scope())
 
         sort_label = wx.StaticText(self, label="So&rt:")
         self.sort_picker = wx.Choice(self, choices=list(_HISTORY_SORTS))
@@ -8055,10 +8272,19 @@ class HistoryDialog(wx.Dialog):
         self.summary = wx.StaticText(self, label="")
         self.summary.SetName("Summary")
 
+        self.source_status = wx.TextCtrl(
+            self, style=wx.TE_MULTILINE | wx.TE_READONLY, name="History source status"
+        )
+        self.source_status.SetMinSize(self.FromDIP(wx.Size(560, 85)))
+        self.source_status.Hide()
+
         buttons = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
         open_button = self.FindWindow(wx.ID_OK)
         if open_button is not None:
             open_button.SetLabel("&Open")
+        reload_button = wx.Button(self, label="&Reload")
+        reload_button.Bind(wx.EVT_BUTTON, lambda _e: self._reload())
+        buttons.Insert(0, reload_button, 0, wx.RIGHT, self.FromDIP(PAD))
         # Names and hiding are BlindPilot's own: no backend's files change.
         rename_button = wx.Button(self, label="Rena&me…")
         rename_button.Bind(wx.EVT_BUTTON, lambda _e: self._rename())
@@ -8094,6 +8320,7 @@ class HistoryDialog(wx.Dialog):
         sizer.Add(list_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, pad)
         sizer.Add(self.list_box, 1, wx.EXPAND | wx.ALL, pad)
         sizer.Add(self.summary, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, pad)
+        sizer.Add(self.source_status, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, pad)
         self.preview.SetMinSize(self.FromDIP(wx.Size(560, 100)))
         sizer.Add(preview_label, 0, wx.LEFT | wx.RIGHT, pad)
         sizer.Add(self.preview, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, pad)
@@ -8123,26 +8350,47 @@ class HistoryDialog(wx.Dialog):
         serial = self._load_serial
         self._loading = True
         self._load_error = ""
+        self._source_warning = ""
+        self.source_status.ChangeValue("")
+        self.source_status.Hide()
+        self.Layout()
         self._entries = []
         self._refresh()
 
         def work() -> None:
             try:
-                entries, error = list_history(backend, cwd), ""
-            except Exception as exc:
-                entries, error = [], f"Could not load conversations: {exc}"
-            _call_after_alive(self._history_loaded, serial, entries, error)
+                with history_diagnostics() as issues:
+                    entries = list_history(backend, cwd)
+                error = ""
+                warning = "\n".join(issue.message for issue in issues)
+            except Exception:
+                entries, error, warning = (
+                    [],
+                    "Could not load conversations. Select Reload to try again.",
+                    "",
+                )
+            _call_after_alive(self._history_loaded, serial, entries, error, warning)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _history_loaded(self, serial: int, entries: List[HistoryEntry], error: str) -> None:
+    def _history_loaded(
+        self, serial: int, entries: List[HistoryEntry], error: str, warning: str = ""
+    ) -> None:
         if not self or serial != self._load_serial:
             return
         self._loading = False
         self._load_error = error
+        self._source_warning = warning
+        self.source_status.ChangeValue(error or warning)
+        self.source_status.Show(bool(error or warning))
+        self.Layout()
         self._entries = entries
         self._refresh()
-        announce(f"Error: {error}" if error else self.summary.GetLabel())
+        announce(
+            f"Error: {error}"
+            if error
+            else self.summary.GetLabel() + (f" {warning}" if warning else "")
+        )
 
     def Destroy(self) -> bool:  # type: ignore[override]
         # Cocoa may defer native destruction past an already queued callback.
@@ -8209,11 +8457,21 @@ class HistoryDialog(wx.Dialog):
         elif self._load_error:
             message = self._load_error
         elif not self._entries:
-            message = "No past conversations found here"
+            message = (
+                "No conversations available from the sources that could be read"
+                if self._source_warning
+                else "No past conversations found here"
+            )
         elif count == 1:
             message = "1 conversation"
         else:
             message = f"{count} conversations"
+        if count and not self._loading and not self._load_error:
+            # Enter changed what it does here, and a list that says only how
+            # many conversations it holds does not say what to do with one.
+            message += ". Enter opens it in a new tab, Ctrl+Enter reads it in a web view"
+        if self._source_warning:
+            message += ". History source status has details. Select Reload to try again."
         self.summary.SetLabel(message)
         self._set_open_enabled(bool(self._shown))
         self._schedule_preview()
@@ -8239,7 +8497,11 @@ class HistoryDialog(wx.Dialog):
 
         def work() -> None:
             try:
-                text = _last_exchange(load_turns(entry))
+                with history_diagnostics() as issues:
+                    text = _last_exchange(load_turns(entry))
+                if issues:
+                    warning = "\n".join(issue.message for issue in issues)
+                    text = f"{warning}\n\n{text}" if text else warning
             except Exception:
                 text = "Could not read this conversation."
             _call_after_alive(self._show_preview, entry, text)
@@ -8280,6 +8542,13 @@ class HistoryDialog(wx.Dialog):
         cfg["history_sort"] = _HISTORY_SORTS[max(0, self.sort_picker.GetSelection())]
         _save_or_announce(cfg)
         self._refresh(self._current() if self._shown else None)
+
+    def _on_scope(self) -> None:
+        """Keep the folder scope the user chose, the way the sort is kept."""
+        cfg = _load_config()
+        cfg["history_scope"] = _HISTORY_SCOPES[max(0, self.scope_picker.GetSelection())]
+        _save_or_announce(cfg)
+        self._reload()
 
     def _rename(self) -> None:
         """F2: a name for this conversation in BlindPilot. Blank goes back."""
@@ -8413,8 +8682,19 @@ class HistoryDialog(wx.Dialog):
             # for somebody who cannot see that focus has moved - opened a
             # conversation instead. The dialog closed either way, which is what
             # made it hard to notice.
-            if isinstance(self.FindFocus(), wx.Button):
+            focus = self.FindFocus()
+            if isinstance(focus, wx.Button) or (
+                focus is not None and focus is getattr(self, "source_status", None)
+            ):
                 event.Skip()
+                return
+            # Enter opens the conversation, the way the Open button does.
+            # Ctrl+Enter reads it in the web view instead, and Shift+Enter does
+            # the same, the way it opens an answer as a page. All three work
+            # from the filter box too, where the conversation is the first
+            # match.
+            if event.ControlDown() or event.ShiftDown():
+                self._open_in_webview()
                 return
             self._accept()
             return
@@ -8434,6 +8714,18 @@ class HistoryDialog(wx.Dialog):
             self.list_box.SetSelection(0)
             return
         event.Skip()
+
+    def _open_in_webview(self) -> None:
+        """Open the selected conversation in an accessible web view (Ctrl+Enter)."""
+        entry = self._current()
+        if entry is None:
+            return
+        dlg = ConversationWebViewDialog(self, entry, self._title(entry))
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+        self.list_box.SetFocus()
 
 
 # How long the application waits, in total, for the turns still running when it
@@ -8671,6 +8963,12 @@ class HermesSessionsDialog(wx.Dialog):
             if isinstance(self.FindFocus(), wx.Button):
                 event.Skip()
                 return
+            # Enter opens the conversation, the way the Open button does.
+            # Ctrl+Enter reads it in the web view instead, and Shift+Enter
+            # does the same.
+            if event.ControlDown() or event.ShiftDown():
+                self._open_in_webview()
+                return
             self._accept()
             return
         if key == wx.WXK_F5:
@@ -8682,6 +8980,39 @@ class HermesSessionsDialog(wx.Dialog):
             self.list_box.SetSelection(0)
             return
         event.Skip()
+
+    def _open_in_webview(self) -> None:
+        """Open the selected conversation in an accessible web view (Ctrl+Enter)."""
+        entry = self._selected()
+        if entry is None:
+            announce("Error: Choose a conversation first")
+            return
+        title = str(entry.get("title") or entry.get("preview") or "Hermes conversation")
+        # The catalog carries the session id, not a file: Hermes keeps every
+        # conversation in one store, and the id is what identifies one in it.
+        history_entry = HistoryEntry(
+            backend=BACKEND_HERMES,
+            session_id=str(entry.get("id") or ""),
+            title=title,
+            path=_hermes_db_path().as_posix(),
+            modified=float(entry.get("started_at") or 0),
+            cwd="",
+            folder="",
+        )
+        # A Hermes on another machine keeps its conversations there, and this
+        # window cannot read them. Saying so is better than an empty page
+        # that looks like a conversation with nothing in it.
+        dlg = ConversationWebViewDialog(
+            self,
+            history_entry,
+            title,
+            missing="This conversation is not stored on this computer, so it cannot be shown here.",
+        )
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+        self.list_box.SetFocus()
 
 
 class SlashCommandDialog(wx.Dialog):
@@ -11780,7 +12111,9 @@ class SessionPanel(wx.Panel):
                         response_number=number,
                     )
                 )
-            self._rows.extend(parse_response(turn.response, number))
+            self._rows.extend(
+                parse_response(turn.response, number, backend_label(self._session_backend))
+            )
         self._refresh_list()
         self._on_title(self, entry.title)
         # Picks up the restored session: relabels the backend line, and gives
@@ -12173,8 +12506,10 @@ class SessionPanel(wx.Panel):
             prefix = "<!-- -->\n\n" + prefix
         rows = parse_response(prefix, n)[1:]
         for i, row in enumerate(rows):
-            if done == 0 and i == 0 and row.kind != "code":
-                row.label = f"{speaker}: {row.label}"
+            if done == 0 and i == 0:
+                row.speaker = speaker
+                if row.kind != "code":
+                    row.label = f"{speaker}: {row.label}"
             self._rows.append(row)
         live[3] = offset + split
         live[4] = done + len(rows)
@@ -12263,7 +12598,9 @@ class SessionPanel(wx.Panel):
             # Silent-until-response mode, or no streamed output arrived — parse the final text
             # into a fresh response so nothing is lost.
             self._response_count += 1
-            new_rows = parse_response(text, self._response_count)
+            new_rows = parse_response(
+                text, self._response_count, backend_label(self._session_backend)
+            )
             self._rows.extend(new_rows)
             self._stream_response = None
             self._refresh_list()
@@ -12286,8 +12623,10 @@ class SessionPanel(wx.Panel):
             speaker = backend_label(self._session_backend)
             segments = parse_response(text, self._stream_response)[1:]
             for i, row in enumerate(segments):
-                if i == 0 and row.kind != "code":
-                    row.label = f"{speaker}: {row.label}"
+                if i == 0:
+                    row.speaker = speaker
+                    if row.kind != "code":
+                        row.label = f"{speaker}: {row.label}"
                 self._rows.append(row)
         n = self._response_count
         self._stream_response = None
@@ -17125,10 +17464,11 @@ class MainFrame(wx.Frame):
 
     def _resume_history(self, entry: HistoryEntry) -> Optional["SessionPanel"]:
         """Open one past conversation in its own tab, ready to be continued."""
-        with wx.BusyCursor():
+        with wx.BusyCursor(), history_diagnostics() as issues:
             turns = load_turns(entry)
+        warning = " ".join(issue.message for issue in issues)
         if not turns:
-            announce(f"Error: {entry.title} could not be read back")
+            announce(warning or f"Error: {entry.title} could not be read back")
             return None
         if not entry.resumable:
             text = "\n\n".join(
@@ -17163,7 +17503,9 @@ class MainFrame(wx.Frame):
         # The resumed tab took the conversation's own backend.
         self._follow_tab_backend()
         responses = "1 response" if len(turns) == 1 else f"{len(turns)} responses"
-        wx.CallAfter(announce, f"Resumed {entry.title}, {responses}")
+        wx.CallAfter(
+            announce, f"Resumed {entry.title}, {responses}" + (f". {warning}" if warning else "")
+        )
         return panel
 
     def _find_in_all_conversations(self) -> None:
@@ -17866,7 +18208,7 @@ F6, Shift+F6: move between the tab strip, the responses and the prompt, and read
 Ctrl+T: new session. Ctrl+W: close it. Ctrl+Q: quit.
 Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+Shift+], Ctrl+Shift+[: next and previous tab.
 Ctrl+1 to Ctrl+9: go to that tab.
-Ctrl+Shift+H: Recent Conversations. In its list, F2 renames, Delete hides and Ctrl+G sets its groups.
+Ctrl+Shift+H: Recent Conversations. Enter opens one in a new tab; Ctrl+Enter reads one in a web view. F2 renames, Delete hides, Ctrl+G sets its groups.
 Ctrl+G: Hermes conversations, when Hermes is the backend.
 Ctrl+Shift+E: model and effort. Ctrl+Shift+M: cycle permission modes.
 Ctrl+Shift+T: turn status. Ctrl+Shift+J: task list. Ctrl+Shift+D: changed files.

@@ -84,12 +84,20 @@ class Prompt:
 class KeyEvent:
     """A key event a dialog's `_on_key` can read and skip."""
 
-    def __init__(self, key: int) -> None:
+    def __init__(self, key: int, control_down: bool = False, shift_down: bool = False) -> None:
         self._key = key
+        self._control_down = control_down
+        self._shift_down = shift_down
         self.skipped = False
 
     def GetKeyCode(self) -> int:
         return self._key
+
+    def ControlDown(self) -> bool:
+        return self._control_down
+
+    def ShiftDown(self) -> bool:
+        return self._shift_down
 
     def Skip(self) -> None:
         self.skipped = True

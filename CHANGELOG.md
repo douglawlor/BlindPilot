@@ -2,6 +2,15 @@
 
 Release history for BlindPilot, newest first. Entries are short by design. The reasoning behind each change is in the commit messages.
 
+## v0.52.7 - 2026-11-02
+
+- Conversation lists (Recent Conversations, Hermes Conversations) can now read the selected conversation in an accessible web view. The web view uses wx-accessible-webview's AccessibleWebView to render the conversation as HTML: the conversation title is the one heading of level one, each exchange is a heading under it, the reading cursor is put into the conversation when it opens, and Escape closes it from inside the conversation. Nothing a conversation names is fetched by the web view showing it. Enter still opens the conversation in a new tab, the way the Open button does; Ctrl+Enter (or Shift+Enter) opens the web view instead.
+- Recent Conversations now lists every folder by default, and remembers the choice. A conversation is filed under the directory it ran in, and that directory depends on where BlindPilot was started from - the source tree when it is run from source, the install folder otherwise - so scoping the list to one folder hid conversations the user knew they had.
+- A conversation store that cannot be read is now reported instead of silently emptying the list. A locked, damaged or unsupported store is named, the reason is given, and what to do about it is said; the conversations that could be read are still listed, and Reload reads the stores again. The report carries no path from the user's disk.
+- A conversation window closed before it finished loading no longer says "Loading conversation" after it has gone.
+- wx-accessible-webview is now a declared dependency. It was missing from requirements.txt, so a source checkout that followed the documented install instructions had no package to import and no conversation could be opened at all.
+- Enter in the filter box of a conversation list opens the first match again. It stopped working when the key handling was narrowed to the list box alone.
+
 ## v0.52.6 - 2026-10-30
 
 CPU audit of agent mode on Windows. Two polling loops were far hotter than they needed to be: the hidden-console watchers swept every window on the desktop 200 times a second for the first 8 seconds of each agent run (now 40 times a second, still fast enough to catch a console as it appears), and the terminal output reader polled its pipe 100 times a second for as long as a session sat idle (now it backs off to 20 times a second once the terminal has been quiet for a second). Chat mode measured clean: no CPU at idle, and streamed replies are parsed incrementally rather than re-parsed per chunk.

@@ -123,6 +123,7 @@ class Row:
     language: Optional[str] = None  # display name, code rows only
     lang_token: Optional[str] = None  # raw fence info word, code rows only
     source: Optional[str] = None  # original Markdown on headers, before speech cleanup
+    speaker: str = ""  # explicit attribution on the first row of an assistant message
 
 
 def _is_noise(cp: int) -> bool:
@@ -339,7 +340,7 @@ def _emit(tokens: list, rows: List[Row], response_number: int) -> None:
         i += 1
 
 
-def parse_response(text: str, response_number: int) -> List[Row]:
+def parse_response(text: str, response_number: int, speaker: str = "") -> List[Row]:
     """Segment one assistant response into an ordered list of rows.
 
     The first row is always the header (``"Response N"``), whose payload is the
@@ -353,12 +354,17 @@ def parse_response(text: str, response_number: int) -> List[Row]:
         payload=full,
         response_number=response_number,
         source=text or "",
+        speaker=speaker,
     )
     rows: List[Row] = [header]
     if not full:
         return rows
     tokens = _MD.parse(full)
     _emit(tokens, rows, response_number)
+    if speaker and len(rows) > 1:
+        rows[1].speaker = speaker
+        if rows[1].kind != "code":
+            rows[1].label = f"{speaker}: {rows[1].label}"
     return rows
 
 
@@ -381,11 +387,12 @@ def _transcript_block(row: Row) -> str:
         mark = "~" if "`" in (row.lang_token or "") else "`"
         runs = re.findall(re.escape(mark) + "+", row.payload)
         fence = mark * max(3, max((len(run) for run in runs), default=0) + 1)
-        return f"{fence}{row.lang_token or ''}\n{row.payload}\n{fence}"
+        block = f"{fence}{row.lang_token or ''}\n{row.payload}\n{fence}"
+        return f"{row.speaker}:\n{block}" if row.speaker else block
     cue = _TRANSCRIPT_CUES.get(row.kind)
     if cue:
         return f"{cue} {row.payload}" if row.payload else cue
-    return row.payload
+    return f"{row.speaker}: {row.payload}" if row.speaker and row.payload else row.payload
 
 
 def reassemble(rows: List[Row], response_number: int) -> str:
@@ -406,7 +413,7 @@ def reassemble(rows: List[Row], response_number: int) -> str:
         if row.response_number != response_number:
             continue
         if row.kind == "header":
-            header_payload = header_payload or row.payload
+            header_payload = header_payload or _transcript_block(row)
             continue
         block = _transcript_block(row)
         if block:
@@ -418,6 +425,12 @@ def reassemble(rows: List[Row], response_number: int) -> str:
 
 # For a page somebody reads: raw HTML in an answer is shown as text, never run.
 _MD_PAGE = MarkdownIt("commonmark", {"html": False}).enable("table")
+
+# For a whole conversation somebody reads in a web view: the same page
+# rendering, with the image rule off, so nothing a conversation names is
+# fetched by the web view showing it. A link to a picture stays a link, and
+# the web view opens links in the browser rather than loading them.
+_MD_CONVERSATION = MarkdownIt("commonmark", {"html": False}).enable("table").disable("image")
 
 
 def markdown_page(text: str, title: str) -> str:

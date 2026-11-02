@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import platform
 import shutil
 import tempfile
 import uuid
@@ -11,6 +13,42 @@ from pathlib import Path
 import pytest
 
 import backend_pool
+
+
+@pytest.fixture(autouse=True)
+def a_child_process_can_inherit_the_standard_handles():
+    """Let the tests that start a child process start one.
+
+    pytest redirects the process's standard input and error to files it owns,
+    and closes the handles they had. `subprocess` still asks Windows for the
+    handles the process was started with, and those are stale: duplicating one
+    fails with "The request is not supported", so every test that starts a
+    child fails with it. Which tests those are depends on the order the suite
+    runs in, so the same commit passes one run and fails the next.
+
+    Pointing the two handles at something alive settles it. Standard input
+    goes to the null device, because a child has no business reading the test
+    runner's, and standard error goes to whatever the runner is capturing
+    into, so what a child writes still reaches the report.
+    """
+    if platform.system() != "Windows":
+        yield
+        return
+    import ctypes
+
+    import msvcrt
+
+    import _winapi
+
+    kernel32 = ctypes.windll.kernel32
+    try:
+        null = msvcrt.get_osfhandle(os.open(os.devnull, os.O_RDWR))
+        kernel32.SetStdHandle(_winapi.STD_INPUT_HANDLE, null)
+        error = msvcrt.get_osfhandle(os.dup(2))
+        kernel32.SetStdHandle(_winapi.STD_ERROR_HANDLE, error)
+    except OSError:
+        pass
+    yield
 
 
 @pytest.fixture(autouse=True)

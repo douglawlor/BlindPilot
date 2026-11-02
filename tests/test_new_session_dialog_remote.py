@@ -237,6 +237,9 @@ def test_local_mode_accepts_a_name_too(frame, tmp_path) -> None:
 def test_local_mode_still_requires_a_folder(frame, refusals) -> None:
     dlg = _open(frame)
     try:
+        # The box is filled with the folder used last, so the empty case has
+        # to be asked for rather than assumed.
+        dlg.folder_box.SetValue("")
         event = wx.CommandEvent(wx.EVT_BUTTON.typeId, wx.ID_OK)
         dlg._on_ok(event)
         assert refusals
