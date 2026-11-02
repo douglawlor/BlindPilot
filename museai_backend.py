@@ -37,6 +37,7 @@ from urllib.parse import quote, urlsplit
 
 import agent_backends
 from agent_backends import BACKEND_MUSEAI
+from history_status import read_error, report_issue
 
 
 def museai_config_path() -> Path:
@@ -84,24 +85,22 @@ def museai_account_lines() -> list[str]:
 
 
 def _cli_json(args: list[str], timeout: int = 60) -> object:
-    from history_status import _read_error, _report
-
     binary = agent_backends.find_backend_cli(BACKEND_MUSEAI)
     if not binary:
-        _report("unreadable", "remote history source")
+        report_issue("unreadable", "remote history source")
         return None
     code, text = agent_backends._probe_backend(binary, args, timeout)
     if code != 0:
-        _report("unreadable", "remote history source")
+        report_issue("unreadable", "remote history source")
         return None
     start = min((i for i in (text.find("["), text.find("{")) if i != -1), default=-1)
     if start == -1:
-        _report("unsupported", "remote history source")
+        report_issue("unsupported", "remote history source")
         return None
     try:
         return json.loads(text[start:])
     except ValueError as exc:
-        _read_error(exc, "remote history source")
+        read_error(exc, "remote history source")
         return None
 
 
@@ -109,9 +108,7 @@ def museai_chats() -> list[dict]:
     """The agent's main chat and side chats, as muse-cli lists them."""
     found = _cli_json(["threads"])
     if found is not None and not isinstance(found, list):
-        from history_status import _report
-
-        _report("unsupported", "remote history source")
+        report_issue("unsupported", "remote history source")
     chats = [c for c in found if isinstance(c, dict)] if isinstance(found, list) else []
     return [c for c in chats if c.get("session_id") and not c.get("archived")]
 
@@ -504,9 +501,7 @@ def museai_chat_snapshot(session_id: str, limit: int = 300) -> tuple[list[tuple[
     """
     found = _cli_json(["history", "--thread", session_id, "--limit", str(limit)])
     if found is not None and not isinstance(found, list):
-        from history_status import _report
-
-        _report("unsupported", "remote history source")
+        report_issue("unsupported", "remote history source")
     turns: list[tuple[str, list[str]]] = []
     sequence = 0
     for message in found if isinstance(found, list) else []:

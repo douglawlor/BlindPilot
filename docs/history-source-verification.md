@@ -7,8 +7,8 @@ that the announcements or native controls work with a screen reader.
 
 ## Automated validation
 
-Ruff lint and formatting checks pass, and mypy reports no issues in 28 source
-files. The full warning-as-error run reports 2,685 passed, 18 skipped and no
+Ruff lint and formatting checks pass, and mypy reports no issues in 30 source
+files. The full warning-as-error run reports 2,700 passed, 18 skipped and no
 failures, with the process exiting 0. Three consecutive runs agreed, with the
 order shuffled by pytest-randomly each time.
 

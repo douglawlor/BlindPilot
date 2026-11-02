@@ -74,6 +74,7 @@ import diagnostics
 from certificates import open_url
 from conversation_list import make_conversation_list
 from conversation_items import ConversationItem, ConversationItemsDialog, collect_items
+from history_status import history_diagnostics
 import remote_sessions
 from task_list import CLAUDE_TASK_TOOLS, TaskList
 from app_updater import (
@@ -187,7 +188,6 @@ from session_history import (
     _hermes_db_path,
     claude_project_slug,
     describe_age,
-    history_diagnostics,
     list_history,
     load_turns,
     make_title,

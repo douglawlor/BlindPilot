@@ -47,6 +47,7 @@ SPDX-License-Identifier: MIT
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -74,13 +75,14 @@ from agent_backends import (
 )
 from history_status import (
     HistoryIssue,
-    _ISSUES,
-    _ISSUE_BACKEND,
-    _read_error,
-    _report,
-    _source_is_dir,
-    _source_is_file,
+    backend_scope,
+    current_issues,
     history_diagnostics,
+    read_error,
+    record_issues,
+    report_issue,
+    source_is_dir,
+    source_is_file,
 )
 from markdown_rows import strip_noise
 from task_list import CLAUDE_TASK_TOOLS, TaskList
@@ -176,7 +178,7 @@ def _mtime(path: Path) -> float:
     try:
         return path.stat().st_mtime
     except OSError as exc:
-        _read_error(exc)
+        read_error(exc)
         return 0.0
 
 
@@ -290,14 +292,14 @@ def _iter_jsonl(path: Path, limit: Optional[int] = None) -> Iterator[dict]:
                 try:
                     record = json.loads(line)
                 except ValueError as exc:
-                    _read_error(exc, "history transcript")
+                    read_error(exc, "history transcript")
                     continue
                 if isinstance(record, dict):
                     yield record
                 else:
-                    _report("unsupported", "history transcript")
+                    report_issue("unsupported", "history transcript")
     except OSError as exc:
-        _read_error(exc, "history transcript")
+        read_error(exc, "history transcript")
         return
 
 
@@ -386,28 +388,27 @@ class _JsonlFormat:
 
 def _globbed(root: Path, pattern: str) -> List[Path]:
     """Files matching ``pattern`` under ``root``, or none if it cannot be walked."""
+
     # Path.glob suppresses traversal errors on recent Python versions. Walk
     # explicitly so an inaccessible folder cannot masquerade as empty history.
-    import fnmatch
-
     def walk(folder: Path, parts: list[str]) -> Iterator[Path]:
         try:
             children = list(folder.iterdir())
         except FileNotFoundError:
             return
         except OSError as exc:
-            _read_error(exc, "history folder")
+            read_error(exc, "history folder")
             return
         for child in children:
             if parts[0] == "**":
-                if _source_is_dir(child) and not child.is_symlink():
+                if source_is_dir(child) and not child.is_symlink():
                     yield from walk(child, parts)
                 elif fnmatch.fnmatch(child.name, parts[-1]):
                     yield child
             elif fnmatch.fnmatch(child.name, parts[0]):
                 if len(parts) == 1:
                     yield child
-                elif _source_is_dir(child):
+                elif source_is_dir(child):
                     yield from walk(child, parts[1:])
 
     return list(walk(root, pattern.split("/")))
@@ -448,7 +449,7 @@ def _jsonl_head(fmt: _JsonlFormat, path: Path, modified: float) -> tuple[str, st
     if len(_JSONL_HEAD_CACHE) >= _JSONL_HEAD_CACHE_MAX:
         _JSONL_HEAD_CACHE.clear()
     # Failed and partial heads must be retried and reported on every scan.
-    if title and session_id and not _ISSUES.get():
+    if title and session_id and not current_issues():
         _JSONL_HEAD_CACHE[key] = (session_id, session_cwd, title)
     return session_id, session_cwd, title
 
@@ -518,13 +519,13 @@ def _claude_project_dirs(cwd: Optional[str]) -> List[Path]:
     root = _home() / ".claude" / "projects"
     if cwd:
         exact = root / claude_project_slug(cwd)
-        return [exact] if _source_is_dir(exact) else []
+        return [exact] if source_is_dir(exact) else []
     try:
-        found = sorted(path for path in root.iterdir() if _source_is_dir(path))
+        found = sorted(path for path in root.iterdir() if source_is_dir(path))
     except FileNotFoundError:
         found = []
     except OSError as exc:
-        _read_error(exc, "history folder")
+        read_error(exc, "history folder")
         found = []
     # Claude Desktop's Cowork sessions run Claude Code in a sandbox folder of
     # their own, with their own config dir, so their transcripts sit inside
@@ -830,14 +831,14 @@ def _hermes_query(sql: str, params: Sequence = ()) -> List[dict]:
     Returns a list of plain dicts so the caller never holds a connection.
     """
     path = _hermes_db_path()
-    if _source_is_file(path):
+    if source_is_file(path):
         connection = _hermes_connect(path)
         if connection is None:
             return []
         try:
             return [dict(row) for row in connection.execute(sql, tuple(params)).fetchall()]
         except Exception as exc:  # noqa: BLE001 - retain other sources
-            _read_error(exc, "history database")
+            read_error(exc, "history database")
             return []
         finally:
             connection.close()
@@ -868,7 +869,7 @@ def _hermes_connect(path: Path):
         connection.row_factory = sqlite3.Row
         return connection
     except Exception as exc:  # noqa: BLE001 - retain other sources
-        _read_error(exc, "history database")
+        read_error(exc, "history database")
         return None
 
 
@@ -1006,7 +1007,7 @@ def _muse_query() -> List[dict]:
         try:
             return [dict(row) for row in connection.execute(_MUSE_LIST_SQL).fetchall()]
         except Exception as exc:  # noqa: BLE001 - retain other sources
-            _read_error(exc, "history database")
+            read_error(exc, "history database")
             return []
         finally:
             connection.close()
@@ -1077,7 +1078,7 @@ _CODEX_HISTORY_DB = "thread_history_1.sqlite"
 
 def _codex_db_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     path = _home() / ".codex" / _CODEX_STATE_DB
-    connection = _hermes_connect(path) if _source_is_file(path) else None
+    connection = _hermes_connect(path) if source_is_file(path) else None
     if connection is None:
         return []
     try:
@@ -1086,7 +1087,7 @@ def _codex_db_entries(cwd: Optional[str]) -> List[HistoryEntry]:
             "FROM threads WHERE archived = 0 AND source NOT LIKE '{%'"
         ).fetchall()
     except Exception as exc:  # noqa: BLE001 - retain JSONL fallback
-        _read_error(exc, "history database")
+        read_error(exc, "history database")
         return []
     finally:
         connection.close()
@@ -1099,7 +1100,7 @@ def _codex_db_entries(cwd: Optional[str]) -> List[HistoryEntry]:
         try:
             modified = float(row["updated_at"] or 0)
         except (ValueError, TypeError) as exc:
-            _read_error(exc, "history database")
+            read_error(exc, "history database")
             modified = 0.0
         entries.append(
             HistoryEntry(
@@ -1117,7 +1118,7 @@ def _codex_db_entries(cwd: Optional[str]) -> List[HistoryEntry]:
 
 def _codex_db_turns(entry: HistoryEntry) -> List[HistoryTurn]:
     path = _home() / ".codex" / _CODEX_HISTORY_DB
-    connection = _hermes_connect(path) if _source_is_file(path) else None
+    connection = _hermes_connect(path) if source_is_file(path) else None
     if connection is None:
         return []
     try:
@@ -1128,7 +1129,7 @@ def _codex_db_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             (entry.session_id,),
         ).fetchall()
     except Exception as exc:  # noqa: BLE001 - retain JSONL fallback
-        _read_error(exc, "history database")
+        read_error(exc, "history database")
         return []
     finally:
         connection.close()
@@ -1137,10 +1138,10 @@ def _codex_db_turns(entry: HistoryEntry) -> List[HistoryTurn]:
         try:
             item = json.loads(row["item_json"])
         except ValueError as exc:
-            _read_error(exc, "history database")
+            read_error(exc, "history database")
             continue
         if not isinstance(item, dict):
-            _report("unsupported", "history database")
+            report_issue("unsupported", "history database")
             continue
         turn = turns.setdefault(str(row["turn_id"]), HistoryTurn())
         if row["item_type"] == "userMessage":
@@ -1169,13 +1170,13 @@ def _codex_turns(entry: HistoryEntry) -> List[HistoryTurn]:
     if entry.path:
         try:
             if Path(entry.path).stat().st_size > _MAX_TRANSCRIPT_BYTES:
-                _report("too large", "history transcript")
+                report_issue("too large", "history transcript")
                 return []
         except OSError as exc:
-            _read_error(exc, "history transcript")
+            read_error(exc, "history transcript")
             return []
         return _jsonl_turns(_CODEX, entry)
-    _report("missing", "history transcript")
+    report_issue("missing", "history transcript")
     return []
 
 
@@ -1255,13 +1256,13 @@ def _freebuff_chat_buckets(cwd: Optional[str]) -> List[Path]:
         names = [name for name in (Path(cwd).name, _git_root_name(cwd)) if name]
         buckets = [root / name / "chats" for name in names]
         buckets.append(root / "chats")
-        return [path for path in buckets if _source_is_dir(path)]
+        return [path for path in buckets if source_is_dir(path)]
     try:
         return sorted(
             path for path in [root / "chats", *_globbed(root, "*/chats")] if path.is_dir()
         )
     except OSError as exc:
-        _read_error(exc, "history folder")
+        read_error(exc, "history folder")
         return []
 
 
@@ -1269,13 +1270,13 @@ def _freebuff_messages(chat: Path) -> List[dict]:
     try:
         payload = json.loads((chat / "chat-messages.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        _read_error(exc, "history transcript")
+        read_error(exc, "history transcript")
         return []
     if not isinstance(payload, list):
-        _report("unsupported", "history transcript")
+        report_issue("unsupported", "history transcript")
         return []
     if any(not isinstance(item, dict) for item in payload):
-        _report("unsupported", "history transcript")
+        report_issue("unsupported", "history transcript")
     return [item for item in payload if isinstance(item, dict)]
 
 
@@ -1290,7 +1291,7 @@ def _freebuff_first_prompt(chat: Path) -> str:
     except FileNotFoundError:
         meta = {}
     except (OSError, ValueError) as exc:
-        _read_error(exc, "history metadata")
+        read_error(exc, "history metadata")
         meta = {}
     if isinstance(meta, dict):
         first = str(meta.get("firstPrompt") or "").strip()
@@ -1330,10 +1331,10 @@ def _freebuff_entries(cwd: Optional[str]) -> List[HistoryEntry]:
         try:
             chats = list(bucket.iterdir())
         except OSError as exc:
-            _read_error(exc, "history folder")
+            read_error(exc, "history folder")
             continue
         for chat in chats:
-            if not _source_is_dir(chat) or chat.name in seen:
+            if not source_is_dir(chat) or chat.name in seen:
                 continue
             entry = _freebuff_entry(chat, bucket_folder)
             if entry is not None:
@@ -1362,14 +1363,14 @@ def _freebuff_desktop_entries(cwd: Optional[str]) -> List[HistoryEntry]:
             # Older stores predate the archive columns, so read whole rows.
             rows = connection.execute("SELECT * FROM threads").fetchall()
         except Exception as exc:  # noqa: BLE001 - retain other sources
-            _read_error(exc, "history database")
+            read_error(exc, "history database")
             rows = []
         finally:
             connection.close()
         for row in rows:
             keys = row.keys()
             if not {"project_path", "id", "title", "updated_at"}.issubset(keys):
-                _report("unsupported", "history database")
+                report_issue("unsupported", "history database")
                 continue
             if any(k in keys and row[k] for k in ("archived_at", "sidebar_archived_at")):
                 continue
@@ -1379,7 +1380,7 @@ def _freebuff_desktop_entries(cwd: Optional[str]) -> List[HistoryEntry]:
             try:
                 modified = float(row["updated_at"] or 0) / 1000
             except (ValueError, TypeError) as exc:
-                _read_error(exc, "history database")
+                read_error(exc, "history database")
                 modified = 0.0
             entries.append(
                 HistoryEntry(
@@ -1405,7 +1406,7 @@ def _freebuff_desktop_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             (entry.session_id, _MAX_TRANSCRIPT_PARTS),
         ).fetchall()
     except Exception as exc:  # noqa: BLE001 - retain other sources
-        _read_error(exc, "history database")
+        read_error(exc, "history database")
         return []
     finally:
         connection.close()
@@ -1414,10 +1415,10 @@ def _freebuff_desktop_turns(entry: HistoryEntry) -> List[HistoryTurn]:
         try:
             parts = json.loads(row["parts_json"] or "[]")
         except ValueError as exc:
-            _read_error(exc, "history database")
+            read_error(exc, "history database")
             continue
         if not isinstance(parts, list):
-            _report("unsupported", "history database")
+            report_issue("unsupported", "history database")
             continue
         # Only what was written to be read: reasoning and tool parts are not.
         texts = [
@@ -1504,12 +1505,12 @@ def _opencode_connect() -> Optional["sqlite3.Connection"]:
     the running opencode is writing to is never written to from here.
     """
     path = _opencode_db()
-    if not _source_is_file(path):
+    if not source_is_file(path):
         return None
     try:
         connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=5)
     except sqlite3.Error as exc:
-        _read_error(exc, "history database")
+        read_error(exc, "history database")
         return None
     return connection
 
@@ -1535,14 +1536,14 @@ def _opencode_first_prompt(connection: "sqlite3.Connection", session_id: str) ->
             (session_id,),
         ).fetchall()
     except sqlite3.Error as exc:
-        _read_error(exc, "history database")
+        read_error(exc, "history database")
         return ""
     for message_data, part_data in rows:
         try:
             message = json.loads(message_data)
             part = json.loads(part_data)
         except ValueError as exc:
-            _read_error(exc, "history database")
+            read_error(exc, "history database")
             continue
         if not isinstance(message, dict) or message.get("role") != "user":
             continue
@@ -1572,7 +1573,7 @@ def _opencode_first_prompt_cached(connection: "sqlite3.Connection", session_id: 
     if session_id in _FIRST_PROMPT_CACHE:
         return _FIRST_PROMPT_CACHE[session_id]
     text = _opencode_first_prompt(connection, session_id)
-    if not _ISSUES.get():
+    if not current_issues():
         _FIRST_PROMPT_CACHE[session_id] = text
     return text
 
@@ -1627,7 +1628,7 @@ def _opencode_entries(cwd: Optional[str]) -> List[HistoryEntry]:
                 )
             )
     except sqlite3.Error as exc:
-        _read_error(exc, "history database")
+        read_error(exc, "history database")
         return entries
     finally:
         connection.close()
@@ -1648,7 +1649,7 @@ def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             try:
                 record = json.loads(data)
             except ValueError as exc:
-                _read_error(exc, "history database")
+                read_error(exc, "history database")
                 continue
             if isinstance(record, dict):
                 roles[str(message_id)] = str(record.get("role") or "")
@@ -1668,7 +1669,7 @@ def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             try:
                 part = json.loads(data)
             except ValueError as exc:
-                _read_error(exc, "history database")
+                read_error(exc, "history database")
                 continue
             if not isinstance(part, dict):
                 continue
@@ -1700,7 +1701,7 @@ def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             if message_id not in mentioned and files:
                 turns.append(HistoryTurn(prompt=_with_attached("", files)))
     except sqlite3.Error as exc:
-        _read_error(exc, "history database")
+        read_error(exc, "history database")
         return turns
     finally:
         connection.close()
@@ -1759,25 +1760,18 @@ def list_history(
     def load(name: str) -> tuple[List[HistoryEntry], list[HistoryIssue]]:
         # Each worker owns its diagnostics; merge in backend order on the
         # calling thread, so simultaneous scans cannot exchange warnings.
-        with history_diagnostics() as issues:
-            token = _ISSUE_BACKEND.set(name)
+        with history_diagnostics() as issues, backend_scope(name):
             try:
                 result = _LISTERS[name](cwd)
             except (OSError, sqlite3.Error, ValueError, TypeError, KeyError) as exc:
-                _read_error(exc)
+                read_error(exc)
                 result = []
-            finally:
-                _ISSUE_BACKEND.reset(token)
         return result, issues
 
     def merge(result: tuple[List[HistoryEntry], list[HistoryIssue]]) -> None:
         found, issues = result
         entries.extend(found)
-        target = _ISSUES.get()
-        if target is not None:
-            for issue in issues:
-                if issue not in target:
-                    target.append(issue)
+        record_issues(issues)
 
     listers = [name for name in backends if name in _LISTERS]
     if len(listers) == 1:
@@ -1792,11 +1786,8 @@ def list_history(
 
 def load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
     """Read turns while attaching diagnostics to this entry's backend."""
-    token = _ISSUE_BACKEND.set(normalize_backend(entry.backend))
-    try:
+    with backend_scope(normalize_backend(entry.backend)):
         return _load_turns(entry)
-    finally:
-        _ISSUE_BACKEND.reset(token)
 
 
 def _load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
@@ -1808,7 +1799,7 @@ def _load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
     backend = normalize_backend(entry.backend)
     reader = _READERS.get(backend)
     if reader is None:
-        _report("unsupported")
+        report_issue("unsupported")
         return []
     # opencode's and Hermes' path is the database every conversation shares, so
     # its size is no measure of this one -- and on a machine that has used
@@ -1821,7 +1812,7 @@ def _load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
         try:
             path = Path(entry.path)
             if path.is_file() and path.stat().st_size > _MAX_TRANSCRIPT_BYTES:
-                _report("too large", "history transcript")
+                report_issue("too large", "history transcript")
                 return []
         except OSError:
             # A path this process cannot look at is not a conversation too big
@@ -1833,7 +1824,7 @@ def _load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
     try:
         turns = reader(entry)
     except (OSError, sqlite3.Error, ValueError, TypeError, KeyError) as exc:
-        _read_error(exc)
+        read_error(exc)
         return []
     return [turn for turn in turns if turn.prompt.strip() or turn.response.strip()]
 
