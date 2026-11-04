@@ -1,0 +1,86 @@
+name: Bug report
+description: Report something that is not working in the douglawlor fork of BlindPilot, on the development branch.
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This tracker is for the **douglawlor/BlindPilot** fork, on the **`development`** branch. Issues filed here are about the fork.
+
+        Upstream BlindPilot at [serrebidev/BlindPilot](https://github.com/serrebidev/BlindPilot) is a separate project with its own issue tracker. If the same bug also affects upstream, please report it there as well: [serrebidev/BlindPilot issues](https://github.com/serrebidev/BlindPilot/issues).
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      description: Describe the result you wanted.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      description: Describe what you actually saw. Copy any error message or text you were shown.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Which operating system were you using?
+      description: The system you ran BlindPilot on.
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system-version
+    attributes:
+      label: Operating system version
+      description: For Windows, for example Windows 11 version 24H2. For macOS, for example macOS 15.4.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: screen-reader
+    attributes:
+      label: Which screen reader were you using?
+      description: The screen reader you had running when the problem happened.
+      options:
+        - NVDA
+        - JAWS
+        - Narrator
+        - VoiceOver
+        - Another screen reader
+        - No screen reader
+    validations:
+      required: true
+
+  - type: input
+    id: screen-reader-version
+    attributes:
+      label: Screen reader version
+      description: The version shown on the About or Help screen of your screen reader. Write "not sure" if you do not know it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce the problem
+      description: Numbered steps, starting from opening BlindPilot.
+    validations:
+      required: true
+
+  - type: input
+    id: blindpilot-version
+    attributes:
+      label: BlindPilot version
+      description: The version shown in Help, About BlindPilot. Write "not sure" if you do not know it.
+    validations:
+      required: false

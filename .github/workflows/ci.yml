@@ -2,11 +2,15 @@ name: Tests
 
 # The release workflow runs these same checks, but only on a `v*` tag. That
 # finds a broken commit on release day, with the build half made. This runs
-# them on the commit instead.
+# them on the commit instead, and only for the development branch: that is
+# the branch the owner works on, so a run against any other branch would test
+# code nobody intends to ship. A manual run can be started against any branch
+# and the trigger cannot filter that, so the guard job below decides.
 on:
   push:
-    branches: ["**"]
+    branches: [development]
   pull_request:
+    branches: [development]
   workflow_dispatch:
 
 # A branch pushed twice in quick succession only needs its newest commit
@@ -19,8 +23,60 @@ permissions:
   contents: read
 
 jobs:
+  guard:
+    name: Check the run concerns development
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+    steps:
+      - name: Decide whether the run is allowed
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The upstream repository has flows of its own. If this file ever
+          # reaches it, the guard refuses here rather than changing what
+          # upstream does.
+          if [ "${GITHUB_REPOSITORY}" = "serrebidev/BlindPilot" ]; then
+            echo "allowed=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Running in ${GITHUB_REPOSITORY}; only the fork's development branch runs flows in this repository."
+            exit 0
+          fi
+
+          # A pull request runs against a merge ref, so GITHUB_REF names no
+          # branch and the branch the run concerns is the base branch. The
+          # trigger already limits pull requests to development; the check is
+          # repeated here so the decision is made in one place.
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            if [ "${GITHUB_BASE_REF:-}" = "development" ]; then
+              echo "allowed=true" >> "${GITHUB_OUTPUT}"
+              echo "Pull request against development; the run is allowed."
+            else
+              echo "allowed=false" >> "${GITHUB_OUTPUT}"
+              echo "::warning::Refusing a pull request against ${GITHUB_BASE_REF:-unknown}; only the development branch runs flows in this repository."
+            fi
+            exit 0
+          fi
+
+          # A push, a schedule and a manual run all name the branch they ran
+          # on, so the ref decides. A manual run can be started against any
+          # branch, which is the one thing the trigger cannot filter.
+          if [ "${GITHUB_REF:-}" = "refs/heads/development" ]; then
+            echo "allowed=true" >> "${GITHUB_OUTPUT}"
+            echo "${GITHUB_REF:-} is the development branch; the run is allowed."
+          else
+            echo "allowed=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning::Refusing ${GITHUB_REF:-an unknown ref}; only the development branch runs flows in this repository."
+          fi
+
   test:
     name: ${{ matrix.label }}
+    # The guard decides whether the run concerns the development branch, so a
+    # manual run against any other branch does no work at all.
+    needs: [guard]
+    if: success() && needs.guard.outputs.allowed == 'true'
     strategy:
       # Every platform's result is wanted. A Windows failure says nothing
       # about whether Linux is also broken, and cancelling the others hides it.

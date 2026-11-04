@@ -3,8 +3,12 @@ name: Dependency Review
 # Pull requests only. It diffs the dependency changes against the GitHub
 # Advisory Database and fails when the PR introduces a known-vulnerable
 # dependency, before the change reaches a release tag.
+#
+# Only pull requests that target the development branch are reviewed, so the
+# result always describes the branch the owner is about to release from.
 on:
   pull_request:
+    branches: [development]
 
 permissions:
   contents: read

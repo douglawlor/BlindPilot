@@ -17,6 +17,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out the fork
+        # The merge itself is done by the API, but the trial merge below needs
+        # the fork's history and the upstream commits to work out which files
+        # conflict with each other.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
       - name: Sync fork branch
         # bash on every runner: pwsh, the Windows default, reports only the
         # last command's exit code, so a failure in the first line of a
@@ -26,5 +34,65 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          gh api --method POST "repos/$REPO/merge-upstream" \
-            -f branch=main
+          set -euo pipefail
+
+          # Upstream main is merged into the fork's development branch. It was
+          # main before, but development is the branch the owner works on and
+          # the branch every other workflow in this repository watches.
+          TARGET_BRANCH=development
+
+          # The upstream repository is read-only here: it is fetched to test
+          # the merge and is never pushed to. The merge-upstream API writes to
+          # the fork and to nothing else.
+          git remote add upstream https://github.com/serrebidev/BlindPilot.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/serrebidev/BlindPilot.git
+          git fetch --no-tags --quiet upstream \
+            "+refs/heads/main:refs/remotes/upstream/main"
+
+          # The merge-upstream API reports a clash as a bare "Merge conflict"
+          # with no file names, so a trial merge is made in a throwaway
+          # worktree to find out what actually conflicts. Nothing is pushed
+          # from this workflow.
+          conflicting_files() {
+            git fetch --no-tags --quiet origin \
+              "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+            local trial_root trial_dir
+            trial_root="$(mktemp -d)"
+            trial_dir="${trial_root}/trial"
+            git worktree add --detach --quiet "${trial_dir}" "origin/${TARGET_BRANCH}"
+            (
+              cd "${trial_dir}"
+              git -c user.name="BlindPilot sync" -c user.email="sync@localhost" \
+                merge --no-commit --no-ff upstream/main >/dev/null 2>&1 || true
+              git diff --name-only --diff-filter=U
+            )
+            git worktree remove --force "${trial_dir}"
+            rm -rf "${trial_root}"
+          }
+
+          report_conflict() {
+            local files="$1"
+            if [ -z "${files}" ]; then
+              echo "::error::Upstream main cannot be merged into the fork's ${TARGET_BRANCH} branch."
+            else
+              echo "::error::Upstream main cannot be merged into the fork's ${TARGET_BRANCH} branch. Conflicting files: $(printf '%s' "${files}" | tr '\n' ' ')"
+            fi
+            echo "::error::Resolve the merge locally in a checkout of ${REPO}: run 'git checkout ${TARGET_BRANCH}' and 'git merge upstream/main', fix the conflicting files, commit the result, then push ${TARGET_BRANCH} to the fork."
+          }
+
+          conflicts="$(conflicting_files)"
+          if [ -n "${conflicts}" ]; then
+            report_conflict "${conflicts}"
+            exit 1
+          fi
+
+          if ! api_output="$(gh api --method POST "repos/${REPO}/merge-upstream" -f branch="${TARGET_BRANCH}" 2>&1)"; then
+            if printf '%s' "${api_output}" | grep -q 'HTTP 409'; then
+              report_conflict "$(conflicting_files)"
+            else
+              echo "::error::The merge-upstream API call failed: ${api_output}"
+            fi
+            exit 1
+          fi
+
+          echo "Merged upstream main into ${TARGET_BRANCH} in ${REPO}."

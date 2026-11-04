@@ -1,0 +1,64 @@
+# Issue template chooser for douglawlor/BlindPilot, the fork of
+# serrebidev/BlindPilot.
+#
+# Introductory text for the reader:
+#
+# This tracker is for the douglawlor fork of BlindPilot, on the development
+# branch. That is the branch the owner works on, and the branch every
+# workflow in this repository watches.
+#
+# Upstream BlindPilot at serrebidev/BlindPilot is a separate project. The
+# owner does not control the upstream issue tracker. Issues filed here are
+# about the fork. A bug that also affects upstream should also be reported in
+# the upstream tracker, at https://github.com/serrebidev/BlindPilot/issues
+#
+# The bug report form and the accessibility report form cover the two
+# structured cases. The remaining labels are question, enhancement,
+# documentation, good first issue and help wanted. Each link below opens a
+# blank issue with that label already chosen. If the label does not appear,
+# ask for it in the first line of the issue and a maintainer will add it by
+# hand.
+#
+# The wontfix label exists in this repository, but its colour is white, so it
+# is invisible on a white background.
+blank_issues_enabled: true
+contact_links:
+  - name: Upstream BlindPilot issues
+    url: https://github.com/serrebidev/BlindPilot/issues
+    about: >
+      This tracker is for the douglawlor fork of BlindPilot, on the development
+      branch. Upstream BlindPilot is a separate project with its own issue
+      tracker. If a bug also affects upstream, report it there as well.
+  - name: Question
+    url: https://github.com/douglawlor/BlindPilot/issues/new?labels=question
+    about: >
+      Ask a question about the fork, on the development branch. This opens a
+      blank issue with the question label set.
+  - name: Enhancement
+    url: https://github.com/douglawlor/BlindPilot/issues/new?labels=enhancement
+    about: >
+      Suggest a new feature, or an improvement to something that exists. This
+      opens a blank issue with the enhancement label set.
+  - name: Documentation
+    url: https://github.com/douglawlor/BlindPilot/issues/new?labels=documentation
+    about: >
+      Report a mistake in the documentation, or ask for more of it. This opens
+      a blank issue with the documentation label set.
+  - name: Good first issue
+    url: https://github.com/douglawlor/BlindPilot/issues/new?labels=good+first+issue
+    about: >
+      Offer to work on a small task that a new contributor could take on. This
+      opens a blank issue with the good first issue label set.
+  - name: Help wanted
+    url: https://github.com/douglawlor/BlindPilot/issues/new?labels=help+wanted
+    about: >
+      Ask for extra help with a task. This opens a blank issue with the help
+      wanted label set.
+  - name: Labels used in this tracker
+    url: https://github.com/douglawlor/BlindPilot/labels
+    about: >
+      These are the labels used in this tracker: accessibility, bug,
+      documentation, duplicate, enhancement, good first issue, help wanted,
+      invalid, question and wontfix. The wontfix label is white, so it is
+      invisible on a white background. A maintainer adds the label by hand if
+      it is not already there.

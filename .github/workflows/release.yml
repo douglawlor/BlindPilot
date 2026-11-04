@@ -14,8 +14,76 @@ permissions:
   contents: read
 
 jobs:
+  guard:
+    name: Check the tag belongs to development
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      release_allowed: ${{ steps.check_tag.outputs.release_allowed }}
+    steps:
+      - name: Check out the full history
+        # The ancestry test needs the commit the tag points at and every
+        # commit on the development branch, so this fetches the whole
+        # repository rather than the single commit of the tag.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Check the tagged commit is on development
+        id: check_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_REF_TYPE:-}" != "tag" ]; then
+            echo "release_allowed=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Not a tag push, so there is nothing to release."
+            exit 0
+          fi
+
+          if [ "${GITHUB_REPOSITORY}" = "serrebidev/BlindPilot" ]; then
+            echo "release_allowed=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning::This workflow is running in the upstream repository; releases are published in the fork only."
+            exit 0
+          fi
+
+          # origin is the fork this workflow runs in. The development branch
+          # and the tag are fetched again because the answer is decided
+          # against the fork as it is now, not as it was when the run started,
+          # and because the guard does not depend on what the checkout step
+          # happened to leave in the object store.
+          git fetch --no-tags origin \
+            "+refs/heads/development:refs/remotes/origin/development"
+
+          # A tag that cannot be fetched is reported here rather than left to
+          # fail later with an unexplained revision error from rev-parse.
+          if ! git fetch --no-tags origin \
+            "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"; then
+            echo "::error::Tag ${GITHUB_REF_NAME} could not be read from ${GITHUB_REPOSITORY}, so there is nothing to release."
+            exit 1
+          fi
+
+          if ! tag_commit="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}" 2>/dev/null)"; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not point at a commit in ${GITHUB_REPOSITORY}, so there is nothing to release."
+            exit 1
+          fi
+
+          if git merge-base --is-ancestor "${tag_commit}" refs/remotes/origin/development; then
+            echo "release_allowed=true" >> "${GITHUB_OUTPUT}"
+            echo "Tag ${GITHUB_REF_NAME} is an ancestor of development, so the release will be published."
+          else
+            echo "release_allowed=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning::Tag ${GITHUB_REF_NAME} is not an ancestor of the development branch, so the release job is skipped."
+          fi
+
   build:
     name: Build ${{ matrix.label }}
+    # The build runs only for a tag the guard has confirmed is on the fork's
+    # development branch. A PyInstaller build and the whole test suite are
+    # slow, and artifacts for a tag the fork will never publish would be work
+    # done for a ref other than the development branch.
+    if: success() && needs.guard.outputs.release_allowed == 'true'
+    needs: [guard]
     strategy:
       fail-fast: false
       matrix:
@@ -123,8 +191,15 @@ jobs:
 
   release:
     name: Publish GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    # Three things have to hold: the build produced the artifacts, the guard
+    # allowed the tag, and the ref is a v* tag. The guard output is only set
+    # when the guard job ran, so a guard that failed leaves it empty and the
+    # release is skipped. always() is used because a skipped build would
+    # otherwise make success() false and leave the reason hidden; the result
+    # check is what stops a release from running without artifacts, so the
+    # build and the release are skipped together.
+    if: always() && needs.build.result == 'success' && needs.guard.outputs.release_allowed == 'true' && startsWith(github.ref, 'refs/tags/v')
+    needs: [build, guard]
     runs-on: ubuntu-24.04
     # Only here, and only this. This job installs nothing: it downloads the
     # artifacts the build made, checks their sums, and creates the release.
@@ -153,6 +228,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          # The release is published in the repository this workflow runs in,
+          # which is the fork. The upstream repository is never a publish
+          # target, and the token used here cannot write to it.
           gh release create "${GITHUB_REF_NAME}" artifacts/* \
             --repo "${GITHUB_REPOSITORY}" \
             --title "BlindPilot ${GITHUB_REF_NAME#v}" \

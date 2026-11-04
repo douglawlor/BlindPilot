@@ -1,0 +1,103 @@
+name: Accessibility report
+description: Report an accessibility barrier in the douglawlor fork of BlindPilot, on the development branch.
+title: "[A11Y] "
+labels: ["accessibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This tracker is for the **douglawlor/BlindPilot** fork, on the **`development`** branch. Issues filed here are about the fork.
+
+        Upstream BlindPilot at [serrebidev/BlindPilot](https://github.com/serrebidev/BlindPilot) is a separate project with its own issue tracker. If the same barrier also affects upstream, please report it there as well: [serrebidev/BlindPilot issues](https://github.com/serrebidev/BlindPilot/issues).
+
+        BlindPilot is a screen-reader-first app, so reports from screen reader users are the most useful kind of report.
+
+  - type: dropdown
+    id: screen-reader
+    attributes:
+      label: Which screen reader were you using?
+      description: The screen reader you had running when the barrier happened.
+      options:
+        - NVDA
+        - JAWS
+        - Narrator
+        - VoiceOver
+        - Another screen reader
+        - No screen reader
+    validations:
+      required: true
+
+  - type: input
+    id: screen-reader-version
+    attributes:
+      label: Screen reader version
+      description: The version shown on the About or Help screen of your screen reader. Write "not sure" if you do not know it.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Which operating system were you using?
+      description: The system you ran BlindPilot on.
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-you-were-doing
+    attributes:
+      label: What were you trying to do?
+      description: The task you were on. For example, sending a message, reading an answer, or changing a setting.
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened instead?
+      description: Say what you heard, what you did not hear, and what a key press did. Exact words are best.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce the barrier
+      description: Numbered steps, starting from opening BlindPilot.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: kind-of-barrier
+    attributes:
+      label: What kind of barrier is this?
+      description: Choose one. Put the detail in the steps above.
+      options:
+        - label: A control cannot be reached with the keyboard
+        - label: A control is not announced by the screen reader
+        - label: The spoken text is wrong or missing
+        - label: Focus is lost or lands in the wrong place
+        - label: Text is hard to read, for example low contrast or small text
+        - label: Something else, described in the steps above
+    validations:
+      required: false
+
+  - type: input
+    id: wcag-criterion
+    attributes:
+      label: WCAG success criterion, if you know it
+      description: For example, 1.4.3 Contrast minimum, or 2.1.1 Keyboard. Leave it blank if you are not sure.
+    validations:
+      required: false
+
+  - type: input
+    id: blindpilot-version
+    attributes:
+      label: BlindPilot version
+      description: The version shown in Help, About BlindPilot. Write "not sure" if you do not know it.
+    validations:
+      required: false
