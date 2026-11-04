@@ -1,3 +1,28 @@
+# BlindPilot 0.55.2
+
+- Fixed: connecting to Hermes failed with a raw "[gateway-exit] refused: ... is owned by a running gateway" error whenever a Hermes gateway was already running for the profile (started by the CLI, a login item, or another client). Blind Pilot now attaches to the running gateway instead of trying to start a second one, using Hermes' own discovery and session ticket. If attaching is not possible, the message says what happened and what to do, in plain words. Reported by Devin Prater, issue #127.
+
+# BlindPilot 0.55.1
+
+- Fixed: Find in All Conversations (Ctrl+Shift+S) read every saved conversation on the GUI thread, so a large history froze keyboard focus and screen-reader speech until the search finished. The search now runs on a worker thread: progress is announced as it goes, the progress dialog can cancel it, and a new search replaces a stale one instead of its results landing on top. First slice of the 50 ms GUI budget spec (#125), from Farhan Khan's issue #126.
+
+# BlindPilot 0.55.0
+
+- Fixed: the Codex model picker offered the catalog bundled inside the installed CLI, so a model the service retired stayed on offer — and a new one stayed hidden — until the CLI itself was updated. The list is now read from the service's refreshed catalog; models Codex marks hidden (including its internal codex-auto-review) are no longer offered, and if the service cannot be reached the bundled copy is used with a spoken note that it may be out of date.
+- New: a window left open re-reads each tab's model list on a timer and announces which models were added or dropped. The interval is a Preferences setting, 15 minutes by default; set it to 0 to turn the background read off. From Farhan Khan, PR #124.
+
+# BlindPilot 0.54.4
+
+- Fixed: Hermes conversations could tear a token in half while streaming. Hermes delivers a reply in small fragments, and the worker released text as soon as a sentence end reached the end of its buffer — so a version number like 3.14.9, a date, a file name or a list marker whose dot landed on a fragment boundary was announced mid-token and split across two rows. The worker now holds a stop at the live edge until the next fragment shows whether the token continues, the same rule the other backends use. The final text is unchanged. Contributed by Devin Prater (PR #122, landed as #123).
+
+# BlindPilot 0.54.3
+
+- New: a reply can now carry its questions as a structured questions block with labelled options, so a backend that cannot ask through a question tool (such as Command Code) can offer choices in the question dialog instead of only a text field. Multiple questions and multi-select are supported, and a question with no options stays free text.
+
+# BlindPilot 0.54.2
+
+- Updated dependencies: pyobjc-framework-cocoa to 13.0 on macOS, and mypy, pytest and hypothesis to their latest versions for development and testing. No feature changes.
+
 # BlindPilot 0.54.1
 
 - Fixed: a GitHub Copilot turn could never start — the worker thread crashed on start with an AttributeError before the turn ran. Copilot turns now start normally.
