@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fork repository settings and workflow changes -- BlindPilot</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1a1a1a; --accent: #0969da;
+  --muted: #4a5058; --border: #8c959f; --surface: #f0f3f6;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --fg: #e6edf3; --accent: #58a6ff;
+    --muted: #a8b1bb; --border: #6e7681; --surface: #161b22;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+/* Every text-bearing element carries an explicit background colour, so a
+   contrast tool can measure it against a real colour rather than against a
+   transparent one it cannot resolve. The colours are the same as the page
+   background except where a surface is wanted. */
+html, body, header, nav, main, footer, section, p, ul, ol, li,
+h1, h2, h3, h4, a, table, thead, tbody, tr, td, th, caption, code, pre, div, span {
+  background-color: var(--bg);
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 1rem; line-height: 1.6; color: var(--fg); background-color: var(--bg);
+  max-width: 72rem; margin: 0 auto; padding: 1.5rem;
+}
+.skip-link {
+  position: absolute; left: -9999px; top: 0; padding: 0.5rem 1rem;
+  background-color: var(--accent); color: var(--bg); z-index: 1000; font-weight: 600;
+}
+.skip-link:focus { left: 0; }
+h1 { font-size: 1.75rem; margin-bottom: 0.5rem; border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; }
+h2 { font-size: 1.4rem; margin-top: 2rem; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25rem; }
+h3 { font-size: 1.15rem; margin-top: 1.25rem; margin-bottom: 0.5rem; }
+p { margin-bottom: 0.9rem; }
+a { color: var(--accent); text-decoration: underline; }
+a:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Long unbroken tokens, such as an API path in a code span, must be allowed
+   to wrap. Without this the page scrolls sideways at 320 CSS pixels. */
+p, li, td, th, caption, code { overflow-wrap: break-word; word-break: break-word; }
+code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em; background-color: var(--surface); color: var(--fg);
+  padding: 0.1em 0.3em; border-radius: 0.2rem;
+}
+pre {
+  background-color: var(--surface); border: 1px solid var(--border); border-radius: 0.4rem;
+  padding: 0.8rem; overflow-x: auto; margin-bottom: 1rem;
+  max-width: 100%;
+}
+pre code { background-color: var(--surface); padding: 0; font-size: 0.9rem; }
+ul, ol { margin: 0 0 0.9rem 1.4rem; }
+li { margin-bottom: 0.35rem; }
+.table-scroll { overflow-x: auto; margin: 1rem 0; }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+caption { font-weight: 600; text-align: left; padding: 0.5rem 0; font-size: 1.05rem; }
+th, td { padding: 0.5rem 0.75rem; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { background-color: var(--surface); font-weight: 600; }
+tbody th { background-color: var(--surface); }
+th code, th a { background-color: var(--surface); }
+.muted { color: var(--muted); }
+header { margin-bottom: 1.5rem; }
+nav { margin: 1.5rem 0; }
+.nav-toc { background-color: var(--surface); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; }
+.nav-toc h2 { margin-top: 0; font-size: 1.1rem; border-bottom: none; }
+.nav-toc ol { margin-left: 1.2rem; }
+footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.95rem; }
+footer h2 { font-size: 1.1rem; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+</style>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Skip to main content</a>
+<header>
+<h1>Fork repository settings and workflow changes</h1>
+<p>Repository administration on the GitHub fork <a href="https://github.com/douglawlor/BlindPilot">douglawlor/BlindPilot</a>, 2026-11-04. Scope: the fork&#x27;s repository settings, the five workflow files under <code>.github/workflows/</code>, and the three issue templates under <code>.github/ISSUE_TEMPLATE/</code>. The work was carried out from the local checkout at <code>C:\dev2\BlindPilot-development</code>, on the <code>development</code> branch, and against the fork only.</p>
+<p>The nature of the work is administrative. Repository settings were changed through the GitHub REST API on the fork, and the workflow and template files were rewritten in the fork&#x27;s own tree. The upstream repository, <a href="https://github.com/serrebidev/BlindPilot">serrebidev/BlindPilot</a>, was not modified in any way.</p>
+<p>The short version. Three settings were changed on the fork: Issues were enabled, the default branch was moved from <code>main</code> to <code>development</code>, and Discussions were left off because the upstream repository has them off as well. The five workflow files were rewritten so that they act on the development branch and refuse to act anywhere else. The issue tracker was given three templates, each of which says a report is about the fork&#x27;s development branch. Nothing was created on GitHub: the fork has no tag, no release, no issue and no pull request. The three repository gates pass on the development branch, and a live run of the sync workflow stopped and named the four files that stand between the fork and upstream.</p>
+</header>
+<nav class="nav-toc" aria-label="Document sections">
+<h2 id="contents">Contents</h2>
+<ol>
+<li><a href="#repository-settings-on-the-fork">Repository settings on the fork</a></li>
+<li><a href="#the-branch-policy">The branch policy</a></li>
+<li><a href="#workflow-changes">Workflow changes</a></li>
+<li><a href="#issue-templates">Issue templates</a></li>
+<li><a href="#what-was-deliberately-not-done">What was deliberately not done</a></li>
+<li><a href="#verification">Verification</a></li>
+<li><a href="#sources">Sources</a></li>
+</ol></nav>
+<main id="main-content">
+<section aria-labelledby="repository-settings-on-the-fork">
+<h2 id="repository-settings-on-the-fork">Repository settings on the fork</h2>
+<div class="table-scroll" role="region" aria-labelledby="table-caption-1" tabindex="0">
+<table>
+<caption id="table-caption-1">Repository settings on the fork, before the change and after it.</caption>
+<thead><tr>
+<th scope="col">Setting</th>
+<th scope="col">Before</th>
+<th scope="col">After</th>
+<th scope="col">How it was verified</th>
+</tr></thead>
+<tbody>
+<tr>
+<th scope="row">Issues</th>
+<td>Disabled</td>
+<td>Enabled</td>
+<td><code>GET /repos/douglawlor/BlindPilot</code> returns <code>has_issues: true</code></td>
+</tr>
+<tr>
+<th scope="row">Default branch</th>
+<td><code>main</code></td>
+<td><code>development</code></td>
+<td><code>GET /repos/douglawlor/BlindPilot</code> returns <code>default_branch: &quot;development&quot;</code></td>
+</tr>
+<tr>
+<th scope="row">Discussions</th>
+<td>Disabled</td>
+<td>Disabled</td>
+<td><code>GET /repos/douglawlor/BlindPilot</code> returns <code>has_discussions: false</code></td>
+</tr>
+</tbody></table></div>
+<p>Issues were disabled on the fork, and GitHub then sent issue filings to the upstream repository. That is the behaviour of a fork whose issue tracker is switched off, and it is why the upstream tracker had to be read to understand where filings were going. Issues are enabled on the fork now, so a filing stays in the fork, at <a href="https://github.com/douglawlor/BlindPilot/issues">douglawlor/BlindPilot issues</a>.</p>
+<p>The REST API reports the present value of a setting and keeps no history of past values, so there is no API record of the earlier state of the issue tracker to quote. The before value is the owner&#x27;s account of it.</p>
+<p>The default branch was moved from <code>main</code> to <code>development</code>. Three things follow from that, and each one was checked. Scheduled workflow runs are made against the default branch, and the fork&#x27;s scheduled runs of 2026-11-01, 2026-11-02, 2026-11-03 and 2026-11-04 all recorded <code>main</code> as the branch they ran on, while the default branch is <code>development</code> now. The default base branch for a new pull request is the default branch, so new pull requests target <code>development</code>. The file browser opens on the default branch, so it opens on <code>development</code>. The live remote agrees: <code>git ls-remote --symref origin HEAD</code> returns <code>refs/heads/development</code>.</p>
+<p>Discussions were left off. The upstream repository has Discussions off as well, and <code>GET /repos/serrebidev/BlindPilot</code> returns <code>has_discussions: false</code> to confirm it. Turning Discussions on in the fork would put a discussion surface in one repository and not in the other, and nothing in this change needs one.</p>
+<p>Neither branch is protected. <code>GET /repos/douglawlor/BlindPilot/branches/development/protection</code> and the same call for <code>main</code> both return &quot;Branch not protected&quot;. That was the state before this change and it is the state now.</p>
+</section>
+<section aria-labelledby="the-branch-policy">
+<h2 id="the-branch-policy">The branch policy</h2>
+<p>The whole change is built around a branch policy the owner set. Four rules.</p>
+<ul>
+<li>All work happens on the fork&#x27;s <code>development</code> branch. That is where the commits are made, where the workflow files live, and where the issue tracker points.</li>
+<li>The fork&#x27;s <code>main</code> branch mirrors upstream&#x27;s <code>main</code> branch and receives changes from upstream only. Nothing else writes to it.</li>
+<li>No change flows automatically from <code>development</code> to <code>main</code>. The owner makes that merge by hand.</li>
+<li>The upstream repository is read-only from the fork and is never written to. Any commit the owner wants to make to upstream is made by hand.</li>
+</ul>
+<p>The policy shows up in the files rather than in a setting, because GitHub has no setting for it. The workflow files on <code>development</code> watch <code>development</code>. The sync workflow merges upstream into the fork&#x27;s <code>main</code> branch and never into <code>development</code>. The release guard accepts only a tag whose commit is on <code>development</code>. The issue templates tell the reader that a report is about <code>development</code>. Nothing in the repository moves a commit from <code>development</code> to <code>main</code>, which is what makes the last rule true by construction rather than by convention.</p>
+</section>
+<section aria-labelledby="workflow-changes">
+<h2 id="workflow-changes">Workflow changes</h2>
+<p>Five files under <code>.github/workflows/</code> were rewritten. Each one now acts on the fork&#x27;s <code>development</code> branch, and each one refuses to act anywhere else. Two of them also refuse to run at all in the upstream repository.</p>
+<h3 id="workflow-changes-ci-yml">ci.yml</h3>
+<p><code>ci.yml</code> runs the test suite on Windows, macOS and Linux. Two changes were made to it.</p>
+<p>The <code>push</code> and <code>pull_request</code> triggers are limited to the <code>development</code> branch. They were <code>push: branches: [&quot;**&quot;]</code> and an unfiltered <code>pull_request:</code> before, which meant a run against any branch in the fork.</p>
+<p>A guard job was added ahead of the test job. It is called &quot;Check the run concerns development&quot;, it runs on <code>ubuntu-24.04</code>, and it produces one output named <code>allowed</code>. It decides in this order.</p>
+<ol>
+<li>If <code>GITHUB_REPOSITORY</code> is <code>serrebidev/BlindPilot</code>, the answer is no and the run stops there. The upstream repository has flows of its own, and this file must not change what upstream does.</li>
+<li>If the event is a pull request, the base branch decides, because a pull request runs against a merge ref and <code>GITHUB_REF</code> names no branch. The answer is yes only when <code>GITHUB_BASE_REF</code> is <code>development</code>.</li>
+<li>Otherwise the ref decides, which covers a push, a schedule and a manual run. The answer is yes only when <code>GITHUB_REF</code> is <code>refs/heads/development</code>.</li>
+</ol>
+<p>The guard exists because a trigger cannot filter a manual run. <code>workflow_dispatch</code> can be started against any branch, and the trigger has no way to stop that, so the decision is made in the job instead.</p>
+<p>The test job now depends on the guard and runs only when the guard allows it, so a refused run does no work at all. The matrix of three runners, the concurrency group and every step of the test job are unchanged.</p>
+<h3 id="workflow-changes-codeql-yml">codeql.yml</h3>
+<p><code>codeql.yml</code> runs static security analysis of the Python source and of the workflow files themselves. It has the same two changes as <code>ci.yml</code>.</p>
+<p>The <code>push</code> and <code>pull_request</code> triggers are limited to the <code>development</code> branch. Before this they were a push on <code>main</code> and a pull request against <code>main</code>.</p>
+<p>The same guard job was added, with the same three checks and the same <code>allowed</code> output, and the <code>analyze</code> job now depends on it and runs only when the guard allows it.</p>
+<p>The weekly schedule was kept. It is the cron entry <code>30 2 * * 1</code>, and it is the one trigger that still runs when nothing is pushed at all. A scheduled run is made against the default branch, which on the fork is now <code>development</code>.</p>
+<h3 id="workflow-changes-dependency-review-yml">dependency-review.yml</h3>
+<p><code>dependency-review.yml</code> checks the dependency changes in a pull request against the GitHub Advisory Database, and fails the pull request when it introduces a known-vulnerable dependency. One change was made to it: the <code>pull_request</code> trigger is limited to the <code>development</code> branch, so the result always describes the branch the owner is about to release from.</p>
+<p>No guard job was added, and none is needed. The file declares only the <code>pull_request</code> trigger. It has no push trigger, no schedule and no <code>workflow_dispatch</code>, so there is no way to start a run against another branch.</p>
+<h3 id="workflow-changes-release-yml">release.yml</h3>
+<p><code>release.yml</code> builds the installers and publishes the release. It has the most changes of the five, because a release is the one thing that must not happen by accident.</p>
+<p>The trigger is unchanged: a push of a <code>v*</code> tag, or a manual run.</p>
+<p>A guard job was added ahead of the build, called &quot;Check the tag belongs to development&quot;. It runs on <code>ubuntu-24.04</code>, it checks out the full history because the ancestry test needs the tagged commit and every commit on <code>development</code>, and it produces one output named <code>release_allowed</code>. It decides in this order.</p>
+<ol>
+<li>If <code>GITHUB_REF_TYPE</code> is not <code>tag</code>, the answer is no. There is nothing to release, which is the case for a manual run.</li>
+<li>If <code>GITHUB_REPOSITORY</code> is <code>serrebidev/BlindPilot</code>, the answer is no. Releases are published in the fork only.</li>
+<li>The tag&#x27;s commit is fetched from <code>origin</code> and compared with <code>development</code>. A tag that cannot be fetched is an error and fails the run. A tag that does not point at a commit is an error and fails the run. The test itself is <code>git merge-base --is-ancestor</code> of the tagged commit against <code>refs/remotes/origin/development</code>. If the tagged commit is an ancestor of the fork&#x27;s <code>development</code> branch, the answer is yes. If it is not, the answer is no and the release is skipped.</li>
+</ol>
+<p>The build job now depends on the guard and runs only when the guard allows it. The release job depends on both the build and the guard, and runs only when the build succeeded, the guard allowed the tag, and the ref is a <code>v*</code> tag. The two are skipped together.</p>
+<p>The publish step was already pointed at the repository the workflow runs in, with <code>--repo &quot;${GITHUB_REPOSITORY}&quot;</code> and the workflow&#x27;s own token, and that was left in place. The upstream repository is never a publish target, and the token used there cannot write to it.</p>
+<h3 id="workflow-changes-sync-upstream-yml">sync-upstream.yml</h3>
+<p><code>sync-upstream.yml</code> brings upstream&#x27;s <code>main</code> into the fork. It runs on a daily schedule, the cron entry <code>17 3 * * *</code>, and can be run by hand.</p>
+<p>The target branch is <code>main</code>. The workflow merges upstream&#x27;s <code>main</code> into the fork&#x27;s <code>main</code> branch and touches nothing else. The fork&#x27;s <code>development</code> branch is the owner&#x27;s own: this workflow never pushes to it, and the owner merges upstream into <code>development</code> by hand when they want it.</p>
+<p>Upstream is read-only here. It is added as a git remote and fetched, with <code>git fetch --no-tags upstream &quot;+refs/heads/main:refs/remotes/upstream/main&quot;</code>, and it is never pushed to. The merge itself is done by the <a href="https://docs.github.com/en/rest/repos/repos#merge-upstream">merge-upstream API</a>, with <code>gh api --method POST &quot;repos/${REPO}/merge-upstream&quot; -f branch=main</code>, which writes to the fork and to nothing else.</p>
+<p>The conflict reporting is new. The merge-upstream API reports a clash as a bare &quot;Merge conflict&quot; with no file names, so the workflow first makes a trial merge in a throwaway worktree, detached from the origin branch, and lists the files that conflict with <code>git diff --name-only --diff-filter=U</code>. If any file conflicts, the workflow prints the file names, prints how to resolve the merge locally, and exits with status 1. Nothing is pushed. If the API call itself fails with HTTP 409, the same file list is produced and the run still fails.</p>
+<p>The permission block was narrowed. The file-level permission is <code>contents: read</code>, and the single <code>sync</code> job, which is the only one that writes, asks for <code>contents: write</code>.</p>
+<p>One note on the state of this file. The change that points the workflow at <code>main</code> is in the working tree of the local checkout and is not committed. The copy in commit <code>240b9c0</code> on the fork&#x27;s <code>development</code> branch points at <code>development</code>, and that is the copy the live run described later in this report used. The behaviour is the same either way; only the branch that is merged into differs.</p>
+</section>
+<section aria-labelledby="issue-templates">
+<h2 id="issue-templates">Issue templates</h2>
+<p>Three files were added under <code>.github/ISSUE_TEMPLATE/</code>. They exist on the fork&#x27;s <code>development</code> branch only. The directory is not on the fork&#x27;s <code>main</code> branch, and <code>GET /repos/douglawlor/BlindPilot/contents/.github/ISSUE_TEMPLATE?ref=main</code> reports it as not found.</p>
+<div class="table-scroll" role="region" aria-labelledby="table-caption-2" tabindex="0">
+<table>
+<caption id="table-caption-2">Issue templates added under .github/ISSUE_TEMPLATE on the fork&#x27;s development branch.</caption>
+<thead><tr>
+<th scope="col">File</th>
+<th scope="col">Name shown to the reader</th>
+<th scope="col">Title prefix</th>
+<th scope="col">Label applied</th>
+<th scope="col">Required answers</th>
+</tr></thead>
+<tbody>
+<tr>
+<th scope="row"><code>1-bug-report.yml</code></th>
+<td>Bug report</td>
+<td><code>[BUG]</code></td>
+<td><code>bug</code></td>
+<td>Expected result, actual result, operating system, operating system version, screen reader, steps to reproduce</td>
+</tr>
+<tr>
+<th scope="row"><code>2-accessibility-report.yml</code></th>
+<td>Accessibility report</td>
+<td><code>[A11Y]</code></td>
+<td><code>accessibility</code></td>
+<td>Screen reader, operating system, what you were trying to do, what happened instead, steps to reproduce</td>
+</tr>
+</tbody></table></div>
+<p><code>1-bug-report.yml</code> is the bug form. Its description reads &quot;Report something that is not working in the douglawlor fork of BlindPilot, on the development branch.&quot; It also asks for the screen reader version and the BlindPilot version, and both of those are optional.</p>
+<p><code>2-accessibility-report.yml</code> is the accessibility form. Its description reads &quot;Report an accessibility barrier in the douglawlor fork of BlindPilot, on the development branch.&quot; It also asks for the kind of barrier, as a list of choices, the WCAG success criterion if the reader knows it, the screen reader version and the BlindPilot version, and all four are optional.</p>
+<p>Both forms open with a markdown block that says the tracker is for the douglawlor fork of BlindPilot, on the <code>development</code> branch, and that upstream BlindPilot is a separate project with its own tracker, with a link to <a href="https://github.com/serrebidev/BlindPilot/issues">serrebidev/BlindPilot issues</a>. The accessibility form adds that BlindPilot is a screen-reader-first app, so reports from screen reader users are the most useful kind of report.</p>
+<p><code>config.yml</code> is the chooser. It leaves blank issues enabled and lists six contact links. The first is Upstream BlindPilot issues, which points at the upstream tracker, for a bug that belongs to upstream. The other five are Question, Enhancement, Documentation, Good first issue and Help wanted, and each one opens a blank issue in the fork with that label already set. The last link points at the fork&#x27;s own list of labels.</p>
+<p>The labels those links rely on exist on the fork. <code>GET /repos/douglawlor/BlindPilot/labels</code> returns accessibility, bug, documentation, duplicate, enhancement, good first issue, help wanted, invalid, question and wontfix.</p>
+<p>Every template states that the report concerns the fork&#x27;s <code>development</code> branch, and every template points at the upstream tracker for a bug that belongs to upstream.</p>
+</section>
+<section aria-labelledby="what-was-deliberately-not-done">
+<h2 id="what-was-deliberately-not-done">What was deliberately not done</h2>
+<ul>
+<li>The upstream repository was not modified in any way by this work. Its default branch is <code>main</code>, its issue tracker is on, its Discussions are off, and it holds 30 releases and 30 tags. Its head commit is 0.55.2, written by serrebidev at 2026-11-04T15:33:19Z. That is that author&#x27;s own release, and it was not made from this work. The fork&#x27;s git remote named <code>upstream</code> points at <code>serrebidev/BlindPilot</code>, and its reflog records fetches only, never a push.</li>
+<li>The fork&#x27;s <code>main</code> branch was not given the development-scoped workflow files, because <code>main</code> receives changes from upstream only. Giving it files written for <code>development</code> would contradict the branch policy, and the next upstream sync would overwrite them anyway.</li>
+<li>No branch, tag, release, issue or pull request was created on GitHub. The fork has two branches, <code>main</code> and <code>development</code>. <code>GET /repos/douglawlor/BlindPilot/releases</code>, <code>GET /repos/douglawlor/BlindPilot/tags</code>, <code>GET /repos/douglawlor/BlindPilot/pulls</code> and <code>GET /repos/douglawlor/BlindPilot/issues</code> all return an empty list.</li>
+<li>The fork&#x27;s <code>main</code> branch still carries the upstream versions of the workflow files. That is correct, because <code>main</code> mirrors upstream. Reading the files at <code>ref=main</code> shows the upstream forms: <code>ci.yml</code> triggers on every branch, <code>codeql.yml</code> triggers on <code>main</code>, <code>dependency-review.yml</code> has an unfiltered <code>pull_request</code> trigger, <code>release.yml</code> has no guard job and no ancestry check, and <code>sync-upstream.yml</code> is a single merge-upstream call with file-level write permission and no conflict reporting. The fork&#x27;s <code>main</code> branch is 13 commits behind upstream&#x27;s <code>main</code> at the time of writing, because the sync stopped on conflicts rather than pushing a half-merged tree.</li>
+</ul>
+<p>Neither branch was given protection rules. Protection was not part of this work and no rule was added.</p>
+</section>
+<section aria-labelledby="verification">
+<h2 id="verification">Verification</h2>
+<p>The three repository gates were run in the local checkout on the <code>development</code> branch at commit <code>240b9c0</code>.</p>
+<div class="table-scroll" role="region" aria-labelledby="table-caption-3" tabindex="0">
+<table>
+<caption id="table-caption-3">The three repository gates, run on the development branch at commit 240b9c0.</caption>
+<thead><tr>
+<th scope="col">Gate</th>
+<th scope="col">Command</th>
+<th scope="col">Result</th>
+</tr></thead>
+<tbody>
+<tr>
+<th scope="row">Lint</th>
+<td><code>python -m ruff check .</code></td>
+<td>All checks passed!</td>
+</tr>
+<tr>
+<th scope="row">Format</th>
+<td><code>python -m ruff format --check .</code></td>
+<td>255 files already formatted</td>
+</tr>
+<tr>
+<th scope="row">Tests</th>
+<td><code>python -m pytest -q -W error</code></td>
+<td>2700 passed, 18 skipped in 142.89s</td>
+</tr>
+</tbody></table></div>
+<p>Every YAML file under <code>.github/</code> was parsed with <code>yaml.safe_load</code>, and all nine parsed cleanly: <code>dependabot.yml</code>, the three files in <code>ISSUE_TEMPLATE</code>, and the five files in <code>workflows</code>.</p>
+<p>A live run of the sync workflow was then started by hand on the fork. <a href="https://github.com/douglawlor/BlindPilot/actions/runs/41855614484">Run 41855614484 of Sync with upstream</a> started at 2026-11-04T15:14:12Z and finished with a failure, and the failure is the correct outcome. The log says:</p>
+<pre><code>##[error]Upstream main cannot be merged into the fork&#x27;s development branch. Conflicting files: CHANGELOG.md RELEASE_NOTES.md blindpilot_app.py requirements.txt
+##[error]Resolve the merge locally in a checkout of douglawlor/BlindPilot: run &#x27;git checkout development&#x27; and &#x27;git merge upstream/main&#x27;, fix the conflicting files, commit the result, then push development to the fork.</code></pre>
+<p>The run stopped there. It pushed nothing, and it did not touch the upstream repository. The upstream head moved later on, to 0.55.2 at 2026-11-04T15:33:19Z, but that commit is written by serrebidev and is that author&#x27;s own release, not anything from this work.</p>
+<p>A local merge tree reproduces the same four files exactly. <code>git merge-tree --write-tree --name-only origin/development upstream/main</code> lists <code>CHANGELOG.md</code>, <code>RELEASE_NOTES.md</code>, <code>blindpilot_app.py</code> and <code>requirements.txt</code>, and nothing else. The same command against the fork&#x27;s <code>main</code> branch lists no conflicting file at all, so the merge the sync workflow makes into <code>main</code> is clean while the merge into <code>development</code> is not.</p>
+<p>The run before it, number 41817972295, scheduled at 2026-11-04T11:00:24Z, ran the older upstream copy of the file and failed with &quot;unexpected end of JSON input&quot;, with no file names and no explanation. That is the difference the conflict reporting makes.</p>
+</section>
+<section aria-labelledby="sources">
+<h2 id="sources">Sources</h2>
+<ul>
+<li><a href="https://docs.github.com/en/rest/repos/repos">GitHub REST API, get and update a repository</a></li>
+<li><a href="https://docs.github.com/en/rest/repos/repos#merge-upstream">GitHub REST API, merge upstream into a fork</a></li>
+<li><a href="https://docs.github.com/en/rest/actions/workflow-runs">GitHub REST API, workflow runs</a></li>
+<li><a href="https://docs.github.com/en/rest/branches/branch-protection">GitHub REST API, branch protection</a></li>
+<li><a href="https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows">GitHub Docs, events that trigger workflows, for the schedule and workflow_dispatch triggers</a></li>
+<li><a href="https://docs.github.com/en/get-started/quickstart/fork-a-repo">GitHub Docs, about forks</a></li>
+<li><a href="https://github.com/douglawlor/BlindPilot">The douglawlor/BlindPilot fork</a></li>
+<li><a href="https://github.com/serrebidev/BlindPilot">The serrebidev/BlindPilot upstream repository</a></li>
+</ul>
+</section>
+</main>
+<footer>
+<p class="muted">This document is the HTML rendering of <code>docs/code-audit/fork-repo-settings.md</code>. The Markdown file is the source. The two carry the same content.</p>
+</footer>
+</body>
+</html>

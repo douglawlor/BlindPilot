@@ -1,5 +1,11 @@
 name: Sync with upstream
 
+# The fork's main branch mirrors upstream's main and nothing else. The
+# fork's development branch is the owner's own: this workflow never pushes
+# to it, and the owner merges upstream into development by hand when they
+# want it. No change flows from development to main either; that is a manual
+# step the owner takes themselves.
+
 on:
   schedule:
     - cron: '17 3 * * *'  # Daily at 03:17 UTC
@@ -11,9 +17,9 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    # Only this job writes: it merges the upstream branch into this one.
-    # A file-level `permissions:` would hand every job in the file the same
-    # token, and the job that needs one is the only job here.
+    # Only this job writes: it merges upstream's main into the fork's main
+    # branch. A file-level `permissions:` would hand every job in the file
+    # the same token, and the job that needs one is the only job here.
     permissions:
       contents: write
     steps:
@@ -36,10 +42,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Upstream main is merged into the fork's development branch. It was
-          # main before, but development is the branch the owner works on and
-          # the branch every other workflow in this repository watches.
-          TARGET_BRANCH=development
+          # This workflow brings upstream's main into the fork's main branch
+          # and touches nothing else. The fork's main branch takes its
+          # content from upstream and from nothing else. The fork's
+          # development branch is the owner's own: nothing here pushes to it,
+          # and the owner merges upstream into development by hand when they
+          # want it.
+          TARGET_BRANCH=main
 
           # The upstream repository is read-only here: it is fetched to test
           # the merge and is never pushed to. The merge-upstream API writes to
