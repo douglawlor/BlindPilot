@@ -24,6 +24,7 @@ from types import SimpleNamespace
 import pytest
 
 import blindpilot_app as app
+import screen_speech
 from doubles import panel_stub
 
 
@@ -146,9 +147,9 @@ def test_announce_takes_an_urgency(monkeypatch, urgent):
     interrupting purges other applications' speech too. Urgency is what macOS
     reads, and what an error sound accompanies."""
     said: list[str] = []
-    monkeypatch.setattr(app, "_SPEAKER", None)
+    monkeypatch.setattr(screen_speech, "_SPEAKER", None)
     monkeypatch.setattr(app.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(app, "_linux_announce", lambda text: said.append(text) or True)
+    monkeypatch.setattr(screen_speech, "_linux_announce", lambda text: said.append(text) or True)
 
     app.announce("something", urgent=urgent)
 

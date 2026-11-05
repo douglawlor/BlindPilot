@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import screen_speech
 
 
 class _Speaker:
@@ -25,8 +26,8 @@ class _Speaker:
 @pytest.fixture
 def speaker(monkeypatch):
     spoken = _Speaker()
-    monkeypatch.setattr(app, "_SPEAKER", spoken)
-    monkeypatch.setattr(app, "_last_announcement", "")
+    monkeypatch.setattr(screen_speech, "_SPEAKER", spoken)
+    monkeypatch.setattr(screen_speech, "_last_announcement", "")
     return spoken
 
 

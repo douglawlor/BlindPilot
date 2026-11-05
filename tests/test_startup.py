@@ -22,11 +22,12 @@ def _startup_check_flag_does_not_leak():
 
 def test_linux_announcements_are_sent_to_orca_without_moving_focus(monkeypatch):
     import blindpilot_app
+    import screen_speech
 
     spoken: list[str] = []
     monkeypatch.setattr(blindpilot_app.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(blindpilot_app, "_SPEAKER", None)
-    monkeypatch.setattr(blindpilot_app, "_linux_announce", lambda text: spoken.append(text) is None)
+    monkeypatch.setattr(screen_speech, "_SPEAKER", None)
+    monkeypatch.setattr(screen_speech, "_linux_announce", lambda text: spoken.append(text) is None)
 
     blindpilot_app.announce("Agent response received")
 
@@ -35,19 +36,20 @@ def test_linux_announcements_are_sent_to_orca_without_moving_focus(monkeypatch):
 
 def test_linux_announcement_from_worker_is_queued_on_the_gui_thread(monkeypatch):
     import blindpilot_app
+    import screen_speech
 
     queued: list[tuple] = []
     monkeypatch.setattr(blindpilot_app.wx, "GetApp", lambda: object())
     monkeypatch.setattr(blindpilot_app.wx, "IsMainThread", lambda: False)
     monkeypatch.setattr(blindpilot_app.wx, "CallAfter", lambda *args: queued.append(args))
     monkeypatch.setattr(
-        blindpilot_app,
+        screen_speech,
         "_linux_native_announce",
         lambda _text: (_ for _ in ()).throw(AssertionError("called off the GUI thread")),
     )
 
-    assert blindpilot_app._linux_announce("Finished") is True
-    assert queued == [(blindpilot_app._linux_announce, "Finished")]
+    assert screen_speech._linux_announce("Finished") is True
+    assert queued == [(screen_speech._linux_announce, "Finished")]
 
 
 def test_gui_startup_smoke_skips_first_run_wizard(monkeypatch):

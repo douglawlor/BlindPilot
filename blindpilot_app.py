@@ -33,7 +33,6 @@ import bisect
 import functools
 import hashlib
 import html
-import importlib.util
 import json
 import logging
 import os
@@ -61,11 +60,16 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence, cast
 
-from linux_accessibility import announce as _linux_native_announce
-
 import wx
 import wx.adv
 from accessible_ai.storage.paths import bundle_dir as _mac_bundle_dir
+
+# The screen reader is spoken to through this module. The two functions are
+# imported by name, so a caller here can still replace them. The state that
+# goes with them is read as screen_speech.<name>, never imported, because
+# announce() reassigns it and an imported copy would go stale.
+import screen_speech
+from screen_speech import announce, repeat_last_announcement
 
 import backend_pool
 from backend_updates import BackendUpdateResult, BackendUpdateService, BackendUpdateState
@@ -193,146 +197,6 @@ from session_history import (
     make_title,
     restore_tasks,
 )
-
-# Optional macOS-only path for posting NSAccessibility announcements so
-# VoiceOver speaks a label when focus enters fields it would otherwise
-# silently land on (notably the multi-line prompt TextCtrl, whose name set
-# via wx.SetName lands on the outer NSScrollView rather than the focused
-# NSTextView).
-#
-# Only whether AppKit exists is settled here. The names themselves are pulled
-# in where they are used, as _bring_to_front already does: importing them here
-# would leave every one of them undefined on Windows and Linux, where the
-# reader of this file — and any type checker — has to take it on faith that
-# nothing reaches them.
-if platform.system() == "Darwin":
-    _MAC_ANNOUNCE = importlib.util.find_spec("AppKit") is not None
-else:
-    _MAC_ANNOUNCE = False
-
-# Windows has no equivalent of the NSAccessibility announcement API, and neither
-# NVDA nor JAWS speaks a status-bar change on its own. accessible_output2 talks
-# to whichever reader is running (NVDA controller client, JAWS COM, SAPI as a
-# last resort), which is what makes live narration audible on Windows.
-# How long to wait before looking for a reader again. Building the output
-# scans for one, which is far too expensive to do per narration line during a
-# fan-out, and a reader that is not there now is usually not there a moment
-# later either.
-_SPEAKER_RETRY_SECONDS = 5.0
-_speaker_retry_after = 0.0
-
-
-def _make_speaker():
-    """Open a connection to whichever screen reader is running, or None."""
-    if platform.system() != "Windows":
-        return None
-    try:
-        from accessible_output2.outputs.auto import Auto as _AutoOutput  # type: ignore
-
-        return _AutoOutput()
-    except Exception:  # library missing, or no usable output found
-        return None
-
-
-_SPEAKER = _make_speaker()
-
-# What `announce` said last, for Repeat Last Announcement. A line spoken while
-# the reader was busy, or cut off by a keystroke, is otherwise gone for good.
-_last_announcement = ""
-
-
-def _linux_announce(text: str) -> bool:
-    """Post an ATK announcement that Orca reads without moving keyboard focus."""
-    if wx.GetApp() is None:
-        return False
-    if not wx.IsMainThread():
-        wx.CallAfter(_linux_announce, text)
-        return True
-    return _linux_native_announce(text)
-
-
-def repeat_last_announcement() -> None:
-    """Say the last announcement again (Conversation menu, Ctrl+Shift+R)."""
-    announce(_last_announcement or "Nothing has been announced yet")
-
-
-def announce(text: str, urgent: bool = False) -> None:
-    """Speak `text` via the screen reader without stealing focus.
-
-    macOS uses the NSAccessibility announcement API, Windows goes through
-    accessible_output2, and Linux posts an ATK announcement for Orca. Callers
-    also mirror the message to the status bar so there is a fallback the review
-    cursor can reach.
-    """
-    global _SPEAKER, _speaker_retry_after, _last_announcement
-    _last_announcement = text
-    if _SPEAKER is None and platform.system() == "Windows":
-        # No reader when BlindPilot started, or the last rebuild failed too.
-        # Looked for again occasionally, so a reader started afterwards is
-        # picked up instead of leaving the session silent for good.
-        now = time.monotonic()
-        if now >= _speaker_retry_after:
-            _speaker_retry_after = now + _SPEAKER_RETRY_SECONDS
-            _SPEAKER = _make_speaker()
-    if _SPEAKER is not None:
-        try:
-            # interrupt=False so a long narration is queued behind whatever the
-            # reader is already saying instead of chopping it off.
-            _SPEAKER.speak(text, interrupt=False)
-        except Exception:
-            # The connection drops when NVDA restarts or a JAWS COM object
-            # disconnects, and the object never recovers. Rebuild it and say
-            # this line again, but not more than once per retry window: a
-            # fan-out narrates far faster than a reader restarts.
-            now = time.monotonic()
-            if now < _speaker_retry_after:
-                return
-            _speaker_retry_after = now + _SPEAKER_RETRY_SECONDS
-            _SPEAKER = _make_speaker()
-            if _SPEAKER is not None:
-                try:
-                    _SPEAKER.speak(text, interrupt=False)
-                except Exception:
-                    _SPEAKER = None
-        return
-    if platform.system() == "Linux" and _linux_announce(text):
-        return
-    if not _MAC_ANNOUNCE:
-        return
-    try:
-        from AppKit import (  # type: ignore
-            NSApp,
-            NSAccessibilityPostNotificationWithUserInfo,
-            NSAccessibilityAnnouncementRequestedNotification,
-            NSAccessibilityAnnouncementKey,
-            NSAccessibilityPriorityKey,
-            NSAccessibilityPriorityHigh,
-            NSAccessibilityPriorityMedium,
-        )
-
-        app = NSApp()
-        if app is None:
-            return
-        window = app.keyWindow() or app.mainWindow()
-        if window is None:
-            return
-        info = {
-            NSAccessibilityAnnouncementKey: text,
-            # High is what an error gets, not what everything gets. Posting
-            # every line at the speak-now tier meant the same code queued
-            # politely on Windows and chopped off the previous line here.
-            NSAccessibilityPriorityKey: (
-                NSAccessibilityPriorityHigh if urgent else NSAccessibilityPriorityMedium
-            ),
-        }
-        NSAccessibilityPostNotificationWithUserInfo(
-            window,
-            NSAccessibilityAnnouncementRequestedNotification,
-            info,
-        )
-    except Exception:  # an announcement is never worth raising over
-        pass
-
 
 # Said when a settings write failed, in place of the sentence that would claim
 # a change the file did not keep.
@@ -5763,10 +5627,13 @@ class FormattedView(wx.Dialog):
 def _speech_route() -> str:
     """How announcements reach a screen reader here, for a bug report."""
     if platform.system() == "Darwin":
-        return "VoiceOver announcements" if _MAC_ANNOUNCE else "none (AppKit missing)"
+        return "VoiceOver announcements" if screen_speech._MAC_ANNOUNCE else "none (AppKit missing)"
     if platform.system() == "Linux":
         return "ATK announcements to Orca"
-    return "accessible_output2" if _SPEAKER is not None else "none found"
+    # Read through the module, not a name imported from it: announce()
+    # rebuilds the reader when it restarts, and a copy taken at import time
+    # would still say the reader was missing.
+    return "accessible_output2" if screen_speech._SPEAKER is not None else "none found"
 
 
 def bug_report_facts(backend: str, app_mode: str) -> str:
@@ -9683,7 +9550,7 @@ class SessionPanel(wx.Panel):
 
     def _on_text_view_focus(self, event: wx.FocusEvent) -> None:
         event.Skip()
-        if _MAC_ANNOUNCE:
+        if screen_speech._MAC_ANNOUNCE:
             wx.CallAfter(announce, "Responses, read only edit")
 
     # ----- Permission mode -----
@@ -10641,7 +10508,7 @@ class SessionPanel(wx.Panel):
     # ----- Prompt focus / key handling -----
     def _on_prompt_focus(self, event: wx.FocusEvent) -> None:
         event.Skip()
-        if _MAC_ANNOUNCE:
+        if screen_speech._MAC_ANNOUNCE:
             wx.CallAfter(announce, "Prompt, edit text")
 
     def _on_prompt_text_changed(self, event: wx.CommandEvent) -> None:
@@ -18125,7 +17992,7 @@ def _bring_to_front() -> None:
     window. Claiming the regular activation policy and activating brings it to
     the front. No-op when AppKit isn't available.
     """
-    if not _MAC_ANNOUNCE:
+    if not screen_speech._MAC_ANNOUNCE:
         return
     try:
         from AppKit import (  # type: ignore
@@ -18317,7 +18184,7 @@ def main() -> int:
         # AppKit is how anything is said to VoiceOver. A build that packaged
         # everything else and dropped it starts, runs, and is silent, which on
         # this application is the same as not working at all.
-        if platform.system() == "Darwin" and not _MAC_ANNOUNCE:
+        if platform.system() == "Darwin" and not screen_speech._MAC_ANNOUNCE:
             return 4
         return 0
     chat_gui_startup_smoke = "--startup-chat-gui-smoke" in sys.argv
@@ -18325,7 +18192,7 @@ def main() -> int:
     # First, so that anything below which goes wrong leaves a trace behind.
     # The packaged build is windowed and has no stderr to fall back on.
     diagnostics.start_logging()
-    if _SPEAKER is None and platform.system() == "Windows":
+    if screen_speech._SPEAKER is None and platform.system() == "Windows":
         # Worth saying plainly: with no output, every announcement on Windows
         # goes nowhere and the application runs in total silence while its
         # menus still say narration is on. accessible-output2 is in
