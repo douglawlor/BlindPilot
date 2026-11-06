@@ -17,13 +17,14 @@ import stub_wx
 stub_wx.install()
 
 import blindpilot_app  # noqa: E402
+import app_config  # noqa: E402
 
 
 @pytest.fixture
 def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point BlindPilot's own config at a throwaway directory."""
-    monkeypatch.setattr(blindpilot_app, "_config_dir", lambda: tmp_path)
-    monkeypatch.setattr(blindpilot_app, "_legacy_config_path", lambda: tmp_path / "absent.json")
+    monkeypatch.setattr(app_config, "_config_dir", lambda: tmp_path)
+    monkeypatch.setattr(app_config, "_legacy_config_path", lambda: tmp_path / "absent.json")
     return tmp_path
 
 

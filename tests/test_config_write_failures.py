@@ -28,6 +28,7 @@ import logging
 import pytest
 
 import blindpilot_app as app
+import app_config
 
 
 @pytest.fixture
@@ -35,9 +36,11 @@ def config_at(tmp_path, monkeypatch):
     """Point the settings file somewhere disposable."""
 
     def place(path):
-        monkeypatch.setattr(app, "_config_path", lambda: path)
-        monkeypatch.setattr(app, "_config_dir", lambda: path.parent)
-        monkeypatch.setattr(app, "_legacy_config_path", lambda: tmp_path / "nothing-here.json")
+        monkeypatch.setattr(app_config, "_config_path", lambda: path)
+        monkeypatch.setattr(app_config, "_config_dir", lambda: path.parent)
+        monkeypatch.setattr(
+            app_config, "_legacy_config_path", lambda: tmp_path / "nothing-here.json"
+        )
         return path
 
     return place
