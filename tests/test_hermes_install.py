@@ -16,25 +16,36 @@ from __future__ import annotations
 from pathlib import Path
 
 import blindpilot_app as app
+import cli_install
 from agent_backends import BACKEND_HERMES
 
 
 class _Patch:
-    """The `with _Patch(...)` helper test_cli_install.py uses, local here."""
+    """The `with _Patch(...)` helper test_cli_install.py uses, local here.
+
+    The names patched here are the installer's own, and the installer calls
+    them from inside cli_install, so that is the module they are patched on.
+    Patching blindpilot_app would look like it worked and change nothing.
+    """
 
     def __init__(self, **patches):
         self._patches = patches
         self._saved: list = []
 
+    @staticmethod
+    def _module(name):
+        return cli_install if hasattr(cli_install, name) else app
+
     def __enter__(self):
         for name, value in self._patches.items():
-            self._saved.append((name, getattr(app, name)))
-            setattr(app, name, value)
+            module = self._module(name)
+            self._saved.append((module, name, getattr(module, name)))
+            setattr(module, name, value)
         return self
 
     def __exit__(self, *_exc):
-        for name, value in reversed(self._saved):
-            setattr(app, name, value)
+        for module, name, value in reversed(self._saved):
+            setattr(module, name, value)
         return False
 
 
@@ -44,7 +55,7 @@ HERMES_SH = "https://hermes-agent.nousresearch.com/install.sh"
 
 def test_hermes_install_argv_uses_the_official_powershell_one_liner(monkeypatch):
     monkeypatch.setattr(app.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(app, "_powershell_exe", lambda: "C:/Windows/powershell.exe")
+    monkeypatch.setattr(cli_install, "_powershell_exe", lambda: "C:/Windows/powershell.exe")
 
     argv = app._hermes_install_argv()
 
@@ -75,7 +86,7 @@ def test_hermes_install_argv_uses_the_official_shell_one_liner(monkeypatch):
 
 def test_hermes_install_argv_is_none_without_prerequisites(monkeypatch):
     monkeypatch.setattr(app.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(app, "_powershell_exe", lambda: None)
+    monkeypatch.setattr(cli_install, "_powershell_exe", lambda: None)
     assert app._hermes_install_argv() is None
 
     monkeypatch.setattr(app.platform, "system", lambda: "Linux")
@@ -170,7 +181,7 @@ def _clean_windows(monkeypatch, tmp_path):
     monkeypatch.setattr(app.platform, "system", lambda: "Windows")
     # The registry lives only on real Windows; this fake must not import it
     # when the suite runs on the macOS/Linux CI lanes.
-    monkeypatch.setattr(app, "ensure_on_windows_path", lambda _directory: True)
+    monkeypatch.setattr(cli_install, "ensure_on_windows_path", lambda _directory: True)
     monkeypatch.delenv(app.UV_PYTHON_DIR_ENV, raising=False)
     monkeypatch.delenv("OneDrive", raising=False)
     monkeypatch.delenv("OneDriveConsumer", raising=False)
@@ -203,7 +214,7 @@ def test_a_reparse_point_on_the_way_makes_a_folder_unusable(tmp_path, monkeypatc
     """The other signal: a step on the path that Windows will not traverse."""
     target = tmp_path / "Roaming" / "uv" / "python"
     monkeypatch.setattr(
-        app,
+        cli_install,
         "_windows_file_attributes",
         lambda path: 0x400 if "Roaming" in str(path) else 0,
     )
@@ -243,9 +254,11 @@ def test_hermes_installer_env_is_remembered_when_roaming_is_synced(monkeypatch, 
     """
     _clean_windows(monkeypatch, tmp_path)
     remembered: list[tuple[str, str]] = []
-    monkeypatch.setattr(app, "_folder_is_cloud_synced", lambda path: "Roaming" in str(path))
+    monkeypatch.setattr(cli_install, "_folder_is_cloud_synced", lambda path: "Roaming" in str(path))
     monkeypatch.setattr(
-        app, "_remember_windows_env_var", lambda name, value: remembered.append((name, value))
+        cli_install,
+        "_remember_windows_env_var",
+        lambda name, value: remembered.append((name, value)),
     )
     log: list[str] = []
 
@@ -260,7 +273,7 @@ def test_hermes_installer_env_is_remembered_when_roaming_is_synced(monkeypatch, 
 def test_hermes_installer_env_says_so_when_both_folders_are_synced(monkeypatch, tmp_path):
     """No automatic answer exists, so name the setting to change instead."""
     _clean_windows(monkeypatch, tmp_path)
-    monkeypatch.setattr(app, "_folder_is_cloud_synced", lambda _path: True)
+    monkeypatch.setattr(cli_install, "_folder_is_cloud_synced", lambda _path: True)
     log: list[str] = []
 
     assert app._hermes_installer_env(log.append) is None
@@ -366,7 +379,7 @@ def test_install_backend_installs_hermes_through_its_own_installer(monkeypatch):
         seen["called"] = True
         return "C:/Users/u/.local/bin/hermes.exe"
 
-    monkeypatch.setattr(app, "install_hermes", fake_install_hermes)
+    monkeypatch.setattr(cli_install, "install_hermes", fake_install_hermes)
 
     assert app.install_backend(BACKEND_HERMES, lambda _line: None) == (
         "C:/Users/u/.local/bin/hermes.exe"

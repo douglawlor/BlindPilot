@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import blindpilot_app  # noqa: E402
+import cli_install  # noqa: E402
 from blindpilot_app import (  # noqa: E402
     BACKEND_FREEBUFF,
     PATH_STANZA_MARKER,
@@ -49,21 +50,31 @@ WINDOWS = platform.system() == "Windows"
 
 
 class _Patch:
-    """Swap module attributes for the duration of a with-block."""
+    """Swap module attributes for the duration of a with-block.
+
+    The names patched here are the installer's own, and the installer calls
+    them from inside cli_install, so that is the module they are patched on.
+    Patching blindpilot_app would look like it worked and change nothing.
+    """
 
     def __init__(self, **kwargs):
         self._new = kwargs
         self._old = {}
 
+    @staticmethod
+    def _module(name):
+        return cli_install if hasattr(cli_install, name) else blindpilot_app
+
     def __enter__(self):
         for name, value in self._new.items():
-            self._old[name] = getattr(blindpilot_app, name)
-            setattr(blindpilot_app, name, value)
+            module = self._module(name)
+            self._old[name] = (module, getattr(module, name))
+            setattr(module, name, value)
         return self
 
     def __exit__(self, *exc):
-        for name, value in self._old.items():
-            setattr(blindpilot_app, name, value)
+        for name, (module, value) in self._old.items():
+            setattr(module, name, value)
         return False
 
 

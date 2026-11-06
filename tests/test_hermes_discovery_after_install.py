@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 import hermes_backend
+import cli_install
 
 
 @pytest.fixture
@@ -96,7 +97,7 @@ def test_the_installer_bin_dir_goes_on_the_search_path(monkeypatch, tmp_path):
 
     monkeypatch.setattr(app.platform, "system", lambda: "Windows")
     monkeypatch.setattr(hermes_backend, "find_hermes_cli", lambda: "C:/l/hermes/bin/hermes.exe")
-    monkeypatch.setattr(app, "_add_to_process_path", lambda p: added.append(Path(p)))
+    monkeypatch.setattr(cli_install, "_add_to_process_path", lambda p: added.append(Path(p)))
 
     assert app._hermes_binary_after_install() == "C:/l/hermes/bin/hermes.exe"
     assert hermes_bin in added

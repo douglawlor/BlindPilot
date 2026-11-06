@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import blindpilot_app  # noqa: E402
 import claude_session  # noqa: E402
+import cli_install  # noqa: E402
 from blindpilot_app import (  # noqa: E402
     BACKEND_CODEX,
     BACKEND_COMMANDCODE,
@@ -51,7 +52,7 @@ def test_claude_update_repairs_an_old_windows_launcher(monkeypatch, tmp_path):
     monkeypatch.setattr(blindpilot_app.platform, "system", lambda: "Windows")
     monkeypatch.setattr(blindpilot_app.Path, "home", classmethod(lambda _cls: tmp_path))
     monkeypatch.setattr(
-        blindpilot_app,
+        cli_install,
         "_executable_version",
         lambda binary: (
             "2.1.226" if Path(binary).read_text(encoding="utf-8") == "new" else "2.1.225"

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import blindpilot_app as app
+import cli_install
 from agent_backends import BACKEND_CODEX, BACKEND_COMMANDCODE, BACKEND_HERMES
 
 wx = pytest.importorskip("wx")
@@ -161,7 +162,7 @@ def test_hermes_install_backend_goes_through_its_own_installer(monkeypatch):
     """install_backend routes Hermes to install_hermes — never npm."""
     lines: list[str] = []
     monkeypatch.setattr(
-        app,
+        cli_install,
         "install_hermes",
         lambda log: log("installing through the official installer") or "hermes.exe",
     )

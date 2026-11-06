@@ -25,6 +25,7 @@ import pytest
 import app_updater
 import blindpilot_app
 import certificates
+import cli_install
 
 ROOT = Path(__file__).resolve().parent.parent
 # `urllib.request.urlopen(` and a bare `urlopen(`, but not the one wrapper
@@ -131,7 +132,7 @@ def test_the_node_download_asks_for_that_store_by_default(monkeypatch):
         asked.append(request.full_url)
         raise OSError("no network in a test")
 
-    monkeypatch.setattr(blindpilot_app, "open_url", fake_open_url)
+    monkeypatch.setattr(cli_install, "open_url", fake_open_url)
     with pytest.raises(OSError):
         blindpilot_app._fetch_url_bytes("https://nodejs.org/dist/index.json")
     assert asked == ["https://nodejs.org/dist/index.json"]

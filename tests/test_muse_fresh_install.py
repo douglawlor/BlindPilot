@@ -20,6 +20,7 @@ from __future__ import annotations
 import sys
 
 import blindpilot_app as app
+import cli_install
 import muse_backend
 import museai_backend
 
@@ -27,8 +28,8 @@ import museai_backend
 def test_muse_install_argv_windows_needs_only_wsl(monkeypatch):
     """A first install inside WSL must be offered when nothing is installed."""
     monkeypatch.setattr(app.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(app, "muse_wsl_exe", lambda: "C:/Windows/System32/wsl.exe")
-    monkeypatch.setattr(app, "muse_installed", lambda: False)
+    monkeypatch.setattr(cli_install, "muse_wsl_exe", lambda: "C:/Windows/System32/wsl.exe")
+    monkeypatch.setattr(cli_install, "muse_installed", lambda: False)
 
     argv = app._muse_install_argv()
 
@@ -39,7 +40,7 @@ def test_muse_install_argv_windows_needs_only_wsl(monkeypatch):
 
 def test_muse_install_argv_windows_is_none_without_wsl(monkeypatch):
     monkeypatch.setattr(app.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(app, "muse_wsl_exe", lambda: None)
+    monkeypatch.setattr(cli_install, "muse_wsl_exe", lambda: None)
 
     assert app._muse_install_argv() is None
 
@@ -147,9 +148,11 @@ def test_install_museai_bootstraps_uv_on_a_fresh_computer(monkeypatch):
         return ["uv", "tool", "upgrade" if upgrade else "install", "muse-cli"]
 
     monkeypatch.setattr(museai_backend, "museai_install_argv", argv_after_bootstrap)
-    monkeypatch.setattr(app, "_install_uv", lambda _log: True)
-    monkeypatch.setattr(app, "_run_logged_process", lambda _argv, _log, env=None: 0)
-    monkeypatch.setattr(app, "find_backend_cli", lambda _backend: "/home/u/.local/bin/muse-cli")
+    monkeypatch.setattr(cli_install, "_install_uv", lambda _log: True)
+    monkeypatch.setattr(cli_install, "_run_logged_process", lambda _argv, _log, env=None: 0)
+    monkeypatch.setattr(
+        cli_install, "find_backend_cli", lambda _backend: "/home/u/.local/bin/muse-cli"
+    )
 
     log: list[str] = []
     assert app.install_museai(log.append) == "/home/u/.local/bin/muse-cli"
@@ -157,7 +160,7 @@ def test_install_museai_bootstraps_uv_on_a_fresh_computer(monkeypatch):
 
 def test_install_museai_reports_the_prereq_when_the_bootstrap_fails(monkeypatch):
     monkeypatch.setattr(museai_backend, "museai_install_argv", lambda upgrade=False: None)
-    monkeypatch.setattr(app, "_install_uv", lambda _log: False)
+    monkeypatch.setattr(cli_install, "_install_uv", lambda _log: False)
 
     log: list[str] = []
     assert app.install_museai(log.append) is None

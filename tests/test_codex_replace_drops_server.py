@@ -11,6 +11,7 @@ import pytest
 
 import backend_pool
 import blindpilot_app as app
+import cli_install
 
 
 @pytest.fixture
@@ -18,15 +19,17 @@ def dropped(monkeypatch):
     keys: list[tuple] = []
     pool = type("PoolStub", (), {"drop": lambda self, key: keys.append(key)})()
     monkeypatch.setattr(backend_pool, "pool", lambda: pool)
-    monkeypatch.setattr(app, "_find_npm", lambda: "npm")
+    monkeypatch.setattr(cli_install, "_find_npm", lambda: "npm")
     monkeypatch.setattr(app, "find_backend_cli", lambda backend: "C:/managed/codex.cmd")
     # None is "could not be started": both paths give up there, after the drop.
-    monkeypatch.setattr(app, "_run_logged_process", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli_install, "_run_logged_process", lambda *args, **kwargs: None)
     return keys
 
 
 def test_updating_codex_drops_the_held_app_server(dropped, monkeypatch):
-    monkeypatch.setattr(app, "_npm_update_argv", lambda backend: ["npm", "install", "codex"])
+    monkeypatch.setattr(
+        cli_install, "_npm_update_argv", lambda backend: ["npm", "install", "codex"]
+    )
     log: list[str] = []
 
     assert app.update_backend(app.BACKEND_CODEX, log.append) is False
@@ -36,7 +39,9 @@ def test_updating_codex_drops_the_held_app_server(dropped, monkeypatch):
 
 
 def test_installing_codex_drops_the_held_app_server(dropped, monkeypatch):
-    monkeypatch.setattr(app, "_npm_install_argv", lambda backend: ["npm", "install", "codex"])
+    monkeypatch.setattr(
+        cli_install, "_npm_install_argv", lambda backend: ["npm", "install", "codex"]
+    )
 
     assert app.install_backend(app.BACKEND_CODEX, lambda _line: None) is None
 
@@ -44,7 +49,9 @@ def test_installing_codex_drops_the_held_app_server(dropped, monkeypatch):
 
 
 def test_other_backends_leave_the_codex_server_alone(dropped, monkeypatch):
-    monkeypatch.setattr(app, "_npm_update_argv", lambda backend: ["npm", "install", "freebuff"])
+    monkeypatch.setattr(
+        cli_install, "_npm_update_argv", lambda backend: ["npm", "install", "freebuff"]
+    )
     monkeypatch.setattr(app, "freebuff_model_options", lambda: ([], "", ""))
 
     app.update_backend(app.BACKEND_FREEBUFF, lambda _line: None)
