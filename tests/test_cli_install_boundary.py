@@ -44,15 +44,33 @@ def _module_names(path: pathlib.Path) -> set[str]:
 
 
 def _called_by_itself(path: pathlib.Path) -> set[str]:
-    """The names a module calls among its own."""
+    """The names a module calls among its own.
+
+    Not only the ones it defines: a name it imports is bound in its
+    namespace too, and the module reads it from there. So a patch aimed at
+    blindpilot_app does not reach it either.
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"), path.as_posix())
     defined = _module_names(path)
+    imported = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add(alias.asname or alias.name)
+
     internal = set()
     for node in tree.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for sub in ast.walk(node):
-            if isinstance(sub, ast.Name) and sub.id in defined and sub.id != node.name:
+            if not isinstance(sub, ast.Name):
+                continue
+            if sub.id == node.name:
+                continue
+            if sub.id in defined or sub.id in imported:
                 internal.add(sub.id)
     return internal
 
@@ -76,6 +94,67 @@ def _load_test_module(name: str):
         del sys.modules[alias]
         return None
     return module
+
+
+def _installer_entry_points() -> set[str]:
+    """The functions that install or update something."""
+    return {
+        "install_backend",
+        "update_backend",
+        "install_claude",
+        "install_hermes",
+        "install_muse",
+        "install_museai",
+        "install_antigravity",
+        "install_portable_node",
+    }
+
+
+def _calls_into_app(path: pathlib.Path) -> set[str]:
+    """The names a test file calls on blindpilot_app."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), path.as_posix())
+    calls = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ("app", "blindpilot_app")
+        ):
+            calls.add(node.func.attr)
+    return calls
+
+
+def test_a_test_of_only_the_installer_patches_only_the_installer():
+    """A file that exercises nothing but the installer has one right place to
+    patch: the installer.
+
+    This is the case that was got wrong. find_backend_cli is called by the
+    installer and by the window, so a patch on blindpilot_app looks right
+    and reaches neither the installer nor the test's subject. It passed on
+    the machine it was written on, because Codex was installed there, and
+    failed on a runner where it was not.
+    """
+    installer = ROOT / "cli_install.py"
+
+    read_by_installer = _called_by_itself(installer)
+    entry_points = _installer_entry_points()
+
+    offenders = []
+    for path in sorted((ROOT / "tests").glob("*.py")):
+        calls = _calls_into_app(path)
+        if not calls or not calls <= entry_points:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r'setattr\(\s*(?:blindpilot_app|app)\s*,\s*"([^"]+)"', text):
+            name = match.group(1)
+            if name in read_by_installer:
+                offenders.append(f"{path.name}: {name}")
+
+    assert not offenders, (
+        "this file tests only the installer, so these are patched on the "
+        "wrong module: " + ", ".join(offenders)
+    )
 
 
 def test_the_installer_is_never_patched_on_the_old_module():
@@ -145,6 +224,7 @@ def test_a_patch_on_the_installer_module_is_what_the_installer_sees(monkeypatch)
         ("_managed_backend_binary", lambda backend: None),
         ("_drop_codex_server", lambda log: None),
         ("find_backend_cli", lambda backend: "C:/managed/codex.cmd"),
+        ("freebuff_model_options", lambda: ([], "", "")),
         ("ensure_on_path", lambda path: None),
     ):
         monkeypatch.setattr(cli_install, name, value)
