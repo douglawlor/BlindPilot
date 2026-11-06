@@ -34,7 +34,6 @@ import platform
 import queue
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import threading
@@ -45,280 +44,17 @@ from pathlib import Path
 from typing import IO, Callable, NamedTuple, Optional, Protocol, Sequence, cast
 
 import backend_pool
+import certificates
 import diagnostics
+from accessible_ai import plan_token
+from accessible_ai.providers import plan_relay
+from accessible_ai.storage import preferences
 from owned_process import _WindowsJob, owned_popen
+import questions
+import process_utils
 
 from markdown_rows import SentenceStreamer
 from markdown_rows import complete_sentences as _complete_sentences
-
-
-# A windowed app owns no console, so every child process Windows considers a
-# console program is given a brand new one - a terminal that pops up on screen,
-# takes focus away from the screen reader, and in the case of a long-running
-# agent CLI stays there for the whole turn. CREATE_NO_WINDOW suppresses it.
-CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
-def no_window_kwargs() -> dict:
-    """``subprocess`` keyword arguments that keep children off the screen."""
-    return {"creationflags": CREATE_NO_WINDOW} if CREATE_NO_WINDOW else {}
-
-
-def own_group_kwargs() -> dict:
-    """``subprocess`` keyword arguments that give a child its own process group.
-
-    Half the provider CLIs are launchers rather than programs: npm's
-    ``@openai/codex`` is a Node script that runs the real Codex as a child of
-    its own, and FreeBuff's is the same shape. Killing the launcher leaves that
-    child running — still holding its lock, still waiting on a sign-in nobody
-    is completing. A child in a group of its own can be stopped as a group,
-    which is the only way to stop what it started too.
-    """
-    return {} if platform.system() == "Windows" else {"start_new_session": True}
-
-
-def end_process_group(proc: object, timeout: float = 0.0) -> None:
-    """Stop a child started with :func:`own_group_kwargs`, and its own children.
-
-    The kill signals go out immediately; the wait for the child to be gone is
-    bounded by *timeout*, or five seconds when it is not given. Stop Task and a
-    closing wizard both call this from the window's own thread, so an unbounded
-    wait there is a frozen application -- but no wait at all leaves a zombie on
-    POSIX and an unreleased handle on Windows, which is why the default path
-    gained the short bounded wait.
-
-    The group is only signalled while the root is live and demonstrably the
-    leader, which is exactly what ``start_new_session`` made it. Anything else, a
-    child started without its own group or a stand-in in a test, is stopped on
-    its own. That check is not a formality: a process still sitting in
-    BlindPilot's group would otherwise have BlindPilot signal itself, and take
-    every other backend down with it.
-
-    On Windows, only a Job Object attached at creation can end descendants.
-    On POSIX, an exited root cannot prove a group still belongs to us, so
-    children left behind by that root are not signalled by a reused group ID.
-    """
-    job = getattr(proc, "_blindpilot_job", None)
-    if job is not None:
-        job.close()
-    poll = getattr(proc, "poll", None)
-    if poll is None or poll() is None:
-        pid = getattr(proc, "pid", None)
-        if isinstance(pid, int) and pid > 0:
-            if platform.system() != "Windows":
-                try:
-                    # POSIX only, and the platform test above is a runtime
-                    # condition the checker cannot read, so against a Windows
-                    # target it reports all three of these as missing.
-                    if os.getpgid(pid) == pid:  # type: ignore[attr-defined]
-                        os.killpg(pid, signal.SIGKILL)  # type: ignore[attr-defined]
-                except OSError:
-                    pass
-        # Also stop the exact root if group or Job cleanup did not reach it.
-        kill = getattr(proc, "kill", None)
-        if kill is not None:
-            try:
-                kill()
-            except OSError:
-                pass
-    # Reaped whether the kill just happened or the child had already exited:
-    # a finished child that is never waited on stays a zombie (POSIX) or keeps
-    # its process handle (Windows). An already-exited child answers at once.
-    wait = getattr(proc, "wait", None)
-    if wait is not None:
-        try:
-            wait(timeout=timeout or 5)
-        except Exception:
-            pass
-
-
-def _close_process_pipes(proc: object) -> None:
-    """Close a child's pipe handles, whatever state the child is in.
-
-    Ending a process does not hand its pipes back: a server stopped after it
-    had already exited still holds one file handle per pipe until something
-    closes them, and an application that stays open all day leaks one server's
-    worth per restart. Best effort, and tolerant of the stand-ins tests use --
-    a pipe without a ``close`` method is left alone rather than raising.
-    """
-    for name in ("stdin", "stdout", "stderr"):
-        pipe = getattr(proc, name, None)
-        close = getattr(pipe, "close", None)
-        if close is None:
-            continue
-        try:
-            close()
-        except (OSError, ValueError, AttributeError):
-            pass
-
-
-_CONSOLE_WINDOW_CLASSES = ("ConsoleWindowClass", "PseudoConsoleWindow")
-
-
-def _banish_window(handle: int) -> None:
-    """Make a console unable to take focus, then hide it off-screen.
-
-    A console created for a pseudo-terminal is owned by BlindPilot, so Windows
-    gives it the executable path for a title and treats it as an ordinary app
-    window. Hiding alone is insufficient: Windows can make it visible again
-    while ConPTY is starting or stopping, at which point it can take focus.
-    Turn it into a disabled, no-activate tool window first, then hide and park
-    it. The watcher reapplies these properties if a child creates another
-    console later.
-    """
-    import ctypes
-
-    user32 = ctypes.windll.user32
-    try:
-        # GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE.
-        # Tool windows do not appear on the taskbar; no-activate prevents an
-        # accidental ShowWindow from moving keyboard or screen-reader focus.
-        ex_style = user32.GetWindowLongW(handle, -20)
-        ex_style = (ex_style | 0x00000080 | 0x08000000) & ~0x00040000
-        user32.SetWindowLongW(handle, -20, ex_style)
-        user32.EnableWindow(handle, False)
-        user32.ShowWindow(handle, 0)  # SW_HIDE
-        # SWP_NOSENDCHANGING | SWP_NOACTIVATE | SWP_NOZORDER |
-        # SWP_NOOWNERZORDER | SWP_HIDEWINDOW.
-        user32.SetWindowPos(
-            handle,
-            0,
-            -32000,
-            -32000,
-            0,
-            0,
-            0x0400 | 0x0010 | 0x0004 | 0x0200 | 0x0080,
-        )
-    except OSError:
-        pass
-
-
-def _descendant_pids(roots: set[int]) -> set[int]:
-    """Every process descended from ``roots``, so only our own are touched."""
-    if platform.system() != "Windows":
-        try:
-            result = subprocess.run(
-                ["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=5
-            )
-            posix_parents = {
-                int(pid): int(parent)
-                for pid, parent in (line.split() for line in result.stdout.splitlines())
-            }
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            return set(roots)
-        family = set(roots)
-        while (
-            additions := {pid for pid, parent in posix_parents.items() if parent in family} - family
-        ):
-            family.update(additions)
-        return family
-    import ctypes
-    import ctypes.wintypes as wintypes
-
-    class ProcessEntry(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ProcessID", wintypes.DWORD),
-            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
-            ("th32ModuleID", wintypes.DWORD),
-            ("cntThreads", wintypes.DWORD),
-            ("th32ParentProcessID", wintypes.DWORD),
-            ("pcPriClassBase", ctypes.c_long),
-            ("dwFlags", wintypes.DWORD),
-            ("szExeFile", ctypes.c_char * 260),
-        ]
-
-    kernel32 = ctypes.windll.kernel32
-    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
-    if snapshot == -1:
-        return set(roots)
-    parents: dict[int, int] = {}
-    try:
-        entry = ProcessEntry()
-        entry.dwSize = ctypes.sizeof(ProcessEntry)
-        ok = kernel32.Process32First(snapshot, ctypes.byref(entry))
-        while ok:
-            parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
-            ok = kernel32.Process32Next(snapshot, ctypes.byref(entry))
-    finally:
-        kernel32.CloseHandle(snapshot)
-
-    family = set(roots)
-    for pid in parents:
-        seen: set[int] = set()
-        walker = pid
-        while walker and walker not in seen:
-            seen.add(walker)
-            if walker in family:
-                family.update(seen)
-                break
-            walker = parents.get(walker, 0)
-    return family
-
-
-def hide_console_windows(roots: Optional[set[int]] = None) -> int:
-    """Hide the console this process was given, and any its children raise.
-
-    Creating the pseudo-terminal attaches a console to BlindPilot itself, which
-    is why the window belongs to us rather than to the program being run. That
-    one is found directly; the enumeration is the safety net for a child that
-    raises its own, and never touches a console outside this process tree.
-    """
-    if platform.system() != "Windows":
-        return 0
-    import ctypes
-    import ctypes.wintypes as wintypes
-
-    user32 = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
-    hidden = 0
-    try:
-        own = kernel32.GetConsoleWindow()
-        if own and user32.IsWindowVisible(own):
-            _banish_window(own)
-            hidden += 1
-    except OSError:
-        pass
-
-    candidates: list[tuple[int, int]] = []
-
-    def visit(handle, _param):
-        try:
-            if not user32.IsWindowVisible(handle):
-                return True
-            name = ctypes.create_unicode_buffer(64)
-            user32.GetClassNameW(handle, name, 64)
-            if name.value in _CONSOLE_WINDOW_CLASSES:
-                owner = wintypes.DWORD()
-                user32.GetWindowThreadProcessId(handle, ctypes.byref(owner))
-                candidates.append((handle, int(owner.value)))
-        except Exception:
-            pass
-        return True
-
-    try:
-        callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(visit)
-        user32.EnumWindows(callback, 0)
-    except Exception:
-        return hidden
-    # Walking the process table costs milliseconds, and this runs in a tight
-    # loop to catch the window in the frame it appears. Pay for it only when
-    # there is actually a console window on screen to account for.
-    if not candidates:
-        return hidden
-    try:
-        family = _descendant_pids(set(roots or ()) | {os.getpid()})
-    except Exception:
-        family = set(roots or ()) | {os.getpid()}
-    for handle, owner in candidates:
-        if owner in family:
-            try:
-                _banish_window(handle)
-                hidden += 1
-            except Exception:
-                pass
-    return hidden
 
 
 BACKEND_CLAUDE = "claude"
@@ -441,239 +177,6 @@ def ignore_subagents(_agent_id: str, _name: str, _status: str, _line: str) -> No
 # `ask_user` tool straight onto its terminal. The window should not have to
 # know any of that, so each adapter translates its provider's shape into the
 # two types below, and translates the answers back on the way out.
-
-
-@dataclass(frozen=True)
-class QuestionOption:
-    """One answer a backend offers for a question.
-
-    `preview` is the longer text some providers attach to an option to show
-    what choosing it would mean (Claude Code's AskUserQuestion sends one, a
-    mock-up or a plan sketch); most options from most providers have none.
-    """
-
-    label: str
-    description: str = ""
-    preview: str = ""
-
-
-@dataclass(frozen=True)
-class Question:
-    """One question a backend has paused its turn to ask.
-
-    ``id`` is whatever the backend needs to match the answer back to the
-    question — Codex's question id, or an empty string where the provider keys
-    answers by position or by the question's own text instead.
-    """
-
-    question: str
-    header: str = ""
-    options: tuple[QuestionOption, ...] = ()
-    multi_select: bool = False
-    id: str = ""
-    # Whether the provider accepts an answer that is not one of its options.
-    # Every backend does today, and all four say so in their tool descriptions
-    # ("the client will add a free-form Other option automatically"), so this
-    # is the default rather than the exception.
-    allow_custom: bool = True
-    # Codex alone marks a question whose answer should not be echoed back.
-    secret: bool = False
-
-
-# Given the questions, return one list of chosen answers per question — the
-# option labels the person picked, or the text they typed instead — or None if
-# they closed the dialog without answering. Called on the worker thread, and
-# blocks it: the backend's turn is waiting on this answer.
-AskQuestions = Callable[[Sequence[Question]], Optional[list[list[str]]]]
-
-
-# How much a turn may say after its last question mark before it counts as
-# having moved on. A question the answer then answers itself -- "Is the extra
-# lock worth it? No, because..." -- is not asked of anybody, and opening a
-# dialog on it would interrupt for nothing. A question followed by the
-# recommendation the asker would give is still a question, and that is what
-# fits inside this.
-_QUESTION_TAIL_CHARS = 200
-
-# Markdown that would otherwise be read out as part of the question.
-_QUESTION_TRIM = "*_`~ 	"
-_BULLET = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
-
-
-def _without_code(text: str) -> str:
-    """The text with fenced code taken out.
-
-    A question mark in a code sample is punctuation, not a question, and a
-    fence is the one place it turns up often enough to matter.
-    """
-    kept: list[str] = []
-    fence = ""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if fence:
-            if stripped.startswith(fence):
-                fence = ""
-            continue
-        if stripped.startswith(("```", "~~~")):
-            fence = stripped[:3]
-            continue
-        kept.append(line)
-    return "\n".join(kept)
-
-
-def trailing_question(text: str) -> str:
-    """The question a turn ended by asking, or "" if it did not end on one.
-
-    Every backend opens the question dialog from a structured event of its own
-    -- AskUserQuestion, request_user_input, clarify, userInput. A model that
-    writes its question into its answer sends none of them, so the turn ends
-    with nothing said and nothing shown, and the person is left waiting on a
-    turn that is itself waiting on them. An interview skill asks that way by
-    design, and Command Code has no question tool in a headless run at all, so
-    on that backend it is the only way a question ever arrives.
-
-    The judgement is deliberately narrow, because a dialog nobody asked for is
-    worse than none: the last question mark has to be near the end, and the
-    question is read no further back than the line it sits on. Both are what
-    keep a turn that asked itself something in passing from being mistaken for
-    one that is waiting.
-    """
-    body = _without_code(text)
-    end = body.rfind("?")
-    if end < 0:
-        return ""
-    if len(body[end + 1 :].strip()) > _QUESTION_TAIL_CHARS:
-        return ""
-    start = body.rfind("\n", 0, end) + 1
-    for mark in ".!?":
-        found = body.rfind(mark, start, end)
-        if found >= 0:
-            start = max(start, found + 1)
-    question = " ".join(body[start : end + 1].split())
-    question = _BULLET.sub("", question.lstrip("#").strip())
-    question = question.strip(_QUESTION_TRIM)
-    if not any(character.isalpha() for character in question):
-        # A stray question mark on its own is not a question worth stopping for.
-        return ""
-    return question if question.endswith("?") else f"{question}?"
-
-
-# The shapes a turn signs off with once its work is already done. "Want me to
-# run the tests as well?", "Should I commit this?", "Anything else?" -- none of
-# them is in the way of anything. The turn ended, the work it asks about is the
-# next thing to ask for, and the reply is the next message whenever it comes,
-# so a modal interrupts the answer being read for a question that was never
-# blocking. What the dialog is for is the other kind: the turn that stopped
-# because only the person can say which name, which of the two, what it should
-# be called. That one still opens it.
-_OFFER_TO_CARRY_ON = re.compile(
-    r"""^(?:(?:and|then|so|also|now|ok|okay|alright),?\s+)*
-    (?:
-        (?:do\s+you\s+want|would\s+you\s+like|want|like)\s+(?:me|us)\s+to\b
-      | (?:should|shall|can|may)\s+(?:i|we)\b
-      | (?:ready|happy|ok(?:ay)?)\s+for\s+(?:me|us)\s+to\b
-      | (?:is\s+)?(?:that|this|it)\s+(?:ok(?:ay)?|good|fine|right|all\s+right)\b
-      | (?:does|do)\s+(?:that|this|they|these)\s+(?:work|help|sound|look|make)\b
-      | (?:sound|sounds|look|looks)\s+(?:good|right|ok(?:ay)?)\b
-      | (?:make|makes)\s+sense\b
-      | any(?:thing)?\s+else\b
-      | any\s+(?:other\s+)?questions?\b
-      | all\s+good\b
-      | good\s+to\s+go\b
-    )""",
-    re.IGNORECASE | re.VERBOSE,
-)
-
-# A fork named inside the offer. "Should I use tabs or spaces?" is an offer by
-# its grammar and a decision by its content, and nobody but the person can
-# settle which way the work goes from there.
-_A_FORK = re.compile(r"\bor\b", re.IGNORECASE)
-
-
-def is_an_offer_to_carry_on(question: str) -> bool:
-    """Whether a question written into an answer signs off rather than waits.
-
-    A turn that delivered its work and closed by offering the next step, or by
-    checking that what it did reads right, is not waiting on anybody: nothing
-    is held open, and the reply is simply the next turn. A turn that stopped
-    short of the work because it needs to be told something is waiting, and
-    that is the one worth a dialog.
-
-    The reading is of the question alone, and deliberately literal: an offer is
-    recognised by the way it is put -- "want me to", "should I", "anything
-    else" -- because the alternative is guessing at intent, and a dialog that
-    opens over a finished turn is exactly the interruption this is meant to
-    spare. A yes-or-no offer to do more is a sign-off; an offer that names a
-    fork is a decision, and stays a question.
-    """
-    text = question.strip().strip(_QUESTION_TRIM)
-    if not _OFFER_TO_CARRY_ON.match(text):
-        return False
-    return not _A_FORK.search(text)
-
-
-# A question block a turn can write into its reply: a fenced code block whose
-# info string is `questions`, carrying the same JSON a backend's question tool
-# sends. Command Code has no way to be asked through a tool at all -- its
-# ask_user_question is withheld from a headless run, because a headless run
-# answers its own prompts by taking the first option, and switching it on would
-# settle the question with nobody hearing it. Everywhere else the tool is what
-# carries the options, so a backend that cannot be asked through one has no way
-# to offer any. A written block does, and it is the same shape all four
-# providers already send, so the dialog reads it with the very code that reads
-# theirs: the same questions, the same options, the same answers back.
-_QUESTION_BLOCK = re.compile(
-    r"```[ \t]*questions[ \t]*\r?\n(?P<body>.*?)```", re.DOTALL | re.IGNORECASE
-)
-
-
-def questions_written_in_the_answer(text: str) -> tuple[Question, ...]:
-    """The questions a turn wrote into its reply as a structured block.
-
-    Empty when there is no block, when the block is not the JSON it claims to
-    be, or when nothing in it is a question. In every one of those cases the
-    prose reading is what is left to try, so a malformed block degrades to
-    exactly what the turn would have done without one rather than losing the
-    question it was trying to ask.
-
-    The last block wins: a turn that revised its own questions is asked the
-    revision, not the draft it first wrote.
-    """
-    blocks = list(_QUESTION_BLOCK.finditer(text))
-    if not blocks:
-        return ()
-    try:
-        raw = json.loads(blocks[-1].group("body"))
-    except (ValueError, TypeError):
-        return ()
-    return _questions(raw, multi_key="multiSelect", id_key="id")
-
-
-def question_summary(questions: Sequence[Question], answers: Optional[list[list[str]]]) -> str:
-    """One row for the transcript saying what was asked and what was said.
-
-    Both halves are kept: read back later, a bare "Spaces" says nothing, and
-    the answer is the reason the rest of the turn went the way it did.
-    """
-    if answers is None:
-        asked = " ".join(question.question for question in questions)
-        return f"Question left unanswered: {asked}"
-    parts = []
-    for index, question in enumerate(questions):
-        chosen = answers[index] if index < len(answers) else []
-        if question.secret:
-            # Codex marks a question whose answer is a secret. The transcript
-            # is read back, copied, and saved, so it gets the fact of an answer
-            # and not the answer itself.
-            parts.append(
-                f'You answered "{question.question}".'
-                if chosen
-                else f'You left "{question.question}" unanswered.'
-            )
-            continue
-        said = ", ".join(chosen) if chosen else "nothing"
-        parts.append(f'You answered "{question.question}" with "{said}".')
-    return " ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -1172,7 +675,7 @@ def backend_auth_ok(backend: str, timeout: int = 12) -> bool:
                 stderr=subprocess.DEVNULL,
                 timeout=timeout,
                 env=subprocess_env(binary),
-                **no_window_kwargs(),
+                **process_utils.no_window_kwargs(),
             )
             return proc.returncode == 0
         if backend == BACKEND_CODEX:
@@ -1183,7 +686,7 @@ def backend_auth_ok(backend: str, timeout: int = 12) -> bool:
                 stderr=subprocess.DEVNULL,
                 timeout=timeout,
                 env=subprocess_env(binary),
-                **no_window_kwargs(),
+                **process_utils.no_window_kwargs(),
             )
             return proc.returncode == 0
         if backend == BACKEND_FREEBUFF:
@@ -1292,7 +795,7 @@ def _probe_backend(binary: str, args: list[str], timeout: int) -> tuple[Optional
             errors="replace",
             timeout=timeout,
             env={**subprocess_env(binary), "PYTHONIOENCODING": "utf-8"},
-            **no_window_kwargs(),
+            **process_utils.no_window_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None, ""
@@ -1714,22 +1217,24 @@ def _claude_usage_payload(binary: str, timeout: int) -> Optional[dict]:
             encoding="utf-8",
             errors="replace",
             env=subprocess_env(binary),
-            **own_group_kwargs(),
-            **no_window_kwargs(),
+            **process_utils.own_group_kwargs(),
+            **process_utils.no_window_kwargs(),
         )
     except (OSError, ValueError):
         return None
     # Reading a pipe has no deadline of its own, so the deadline is the
     # process: ending it is what turns a silent CLI into an end of stream
     # rather than a status dialog that never opens.
-    watchdog = threading.Timer(max(1.0, float(timeout)), lambda: end_process_group(proc))
+    watchdog = threading.Timer(
+        max(1.0, float(timeout)), lambda: process_utils.end_process_group(proc)
+    )
     watchdog.daemon = True
     watchdog.start()
     try:
         return _claude_usage_exchange(proc)
     finally:
         watchdog.cancel()
-        end_process_group(proc)
+        process_utils.end_process_group(proc)
         # Ending the process does not hand its pipes back. /status can be asked
         # as often as somebody presses it, and two file handles a press is a
         # leak in an application that stays open all day.
@@ -1897,8 +1402,13 @@ def _codex_usage_result(binary: str, timeout: int) -> object:
     for the length of the question so the reaper cannot stop it underneath.
     Where no process is held, one is started for the question and stopped
     again, the way every other part of this report is asked.
+
+    Asked of the Account the backend is set to use, because that is whose
+    windows the report is about: a plan's remaining usage is not the same
+    question as the one Codex's own login answers.
     """
-    key = backend_pool.pool_key(BACKEND_CODEX)
+    account = codex_plan_account()
+    key = codex_pool_key(account)
     shared = backend_pool.pool()
     server: Optional[CodexServer] = None
     with _CODEX_START_LOCK:
@@ -1913,7 +1423,7 @@ def _codex_usage_result(binary: str, timeout: int) -> object:
         finally:
             server.give_back()
     try:
-        started = _start_codex_server(binary)
+        started = _start_codex_server(binary, plan_account=account)
     except OSError:
         return None
     try:
@@ -2566,7 +2076,7 @@ def _codex_model_payload(binary: str, cwd: Optional[str], extra: Sequence[str]) 
             errors="replace",
             timeout=30,
             env=subprocess_env(binary),
-            **no_window_kwargs(),
+            **process_utils.no_window_kwargs(),
         )
         return json.loads(result.stdout)
     except (OSError, subprocess.TimeoutExpired, ValueError):
@@ -3179,74 +2689,391 @@ def codex_question_args() -> tuple[str, ...]:
     return (*_CODEX_QUESTION_ARGS, "-c", f"developer_instructions={value}")
 
 
-def _question_options(raw: object) -> tuple[QuestionOption, ...]:
-    """The labelled options of a question, as Codex and opencode both send them."""
-    if not isinstance(raw, list):
-        return ()
-    return tuple(
-        QuestionOption(
-            str(option["label"]),
-            str(option.get("description") or ""),
-            str(option.get("preview") or ""),
-        )
-        for option in raw
-        if isinstance(option, dict) and option.get("label")
+# ----- Codex on a ChatGPT-plan account -----
+#
+# Codex is pointed at the plan's Responses endpoint through configuration
+# overrides on its own command line, and fetches its own bearer token by
+# running this app's token-printing mode on an interval. The token is
+# therefore in neither the child's command line nor its environment. The
+# endpoint itself is reached through a loopback relay (accessible_ai.providers.
+# plan_relay) because the plan token is a subscription-sharing token, and that
+# endpoint refuses several item types Codex emits; the relay drops them.
+
+PLAN_PROVIDER_ID = "blindpilot-chatgpt"
+
+# How often Codex runs the token command again. Each run is its own process with
+# no token in memory, so each one performs an exchange and rotates the refresh
+# token; ten minutes is how often that is worth paying, and a run that fails --
+# another process holding the store, a machine that was asleep -- is retried long
+# before the token under it expires.
+PLAN_TOKEN_REFRESH_MS = 600_000
+# Longer than the command's own bounded wait for another process's refresh (two
+# 30-second exchanges plus 30), so a refresh that waited is not reported as a
+# failing token command.
+PLAN_TOKEN_TIMEOUT_MS = 120_000
+
+
+@dataclass(frozen=True)
+class PlanAccount:
+    """The ChatGPT-plan account a Codex turn runs on.
+
+    The id is what the token command takes; the name is how a failure is
+    reported, because an id on its own does not say which account it was.
+    """
+
+    account_id: int
+    name: str = ""
+
+    @property
+    def label(self) -> str:
+        return self.name or f"account {self.account_id}"
+
+
+class PlanTokenError(OSError):
+    """The bound Account's token command failed, so no turn can run on it.
+
+    An OSError like every other reason a launch does not happen, so a caller
+    that only knows "Codex could not start" still catches it. The distinct type
+    is what says the failure names the Account rather than the CLI, which is
+    what lets the window stop retrying an Account that has gone.
+    """
+
+
+class _Unbound:
+    """No Account taken for this conversation yet: read the saved choice.
+
+    ``None`` is a real answer -- Codex's own login -- so "nothing chosen yet"
+    cannot be spelled as ``None`` as well. A tab tells a turn which Account its
+    conversation is bound to; one that is not bound yet is told this, and the
+    turn reads the saved choice once and keeps it for the rest of the turn.
+    """
+
+    def __repr__(self) -> str:
+        return "UNBOUND"
+
+
+UNBOUND = _Unbound()
+
+
+# ----- Which Account the Codex backend uses -----
+#
+# Chosen once for the backend, saved beside the window's own preferences, and
+# inherited by new conversations: nothing here is per conversation. The value is
+# either a specific ChatGPT-plan Account or nothing at all, and nothing at all
+# means Codex's own login -- the behaviour every existing setup has, so an
+# install that has chosen nothing runs exactly as it did.
+#
+# A conversation that has begun keeps the Account it began on, so this is read
+# once per conversation rather than once per turn: a switch affects the next
+# conversation, not the thread somebody is in the middle of. A tab hands its
+# bound Account to each of its turns (see `CodexWorker`), and only a turn told
+# `UNBOUND` reads this at all.
+#
+# Read on the thread about to launch a process, never on the window's: it is a
+# small file, but it is a file. Kept in this module rather than with the other
+# preferences because the Codex launch is what needs it, and the window already
+# imports this module rather than the other way round.
+
+# The key the choice is stored under in the settings file. Named for the
+# backend, because it is that backend's choice and not a global one.
+CODEX_PLAN_ACCOUNT = "codex_plan_account"
+
+
+def _settings_file() -> Path:
+    """The settings file the window keeps its preferences in."""
+    return blindpilot_config_dir() / "config.json"
+
+
+def codex_plan_account() -> Optional[PlanAccount]:
+    """The Account the Codex backend is set to use, or None for its own login."""
+    saved = preferences.load_config((_settings_file(),)).get(CODEX_PLAN_ACCOUNT)
+    if not isinstance(saved, dict):
+        return None
+    try:
+        account_id = int(saved.get("account_id", 0))
+    except (TypeError, ValueError):
+        # Written by hand, or by a release that meant something else by it.
+        # Codex's own login is the answer that always works.
+        return None
+    if account_id <= 0:
+        return None
+    return PlanAccount(account_id=account_id, name=str(saved.get("name") or ""))
+
+
+def save_codex_plan_account(account: Optional[PlanAccount]) -> bool:
+    """Remember which Account the Codex backend uses. False if it was not saved.
+
+    Only this key changes: the same file holds the window's preferences, and
+    the write is `preferences.update_config`, which reads and writes the file
+    under one lock -- the same save path the window uses -- so a choice saved
+    here cannot put back a preference saved a moment earlier, and a
+    preference saved by the window cannot cost somebody their choice.
+    """
+    value = (
+        None if account is None else {"account_id": int(account.account_id), "name": account.name}
+    )
+    return preferences.update_config(_settings_file(), {CODEX_PLAN_ACCOUNT: value})
+
+
+def codex_pool_key(account: Optional[PlanAccount] = None) -> tuple:
+    """The pool key for the Codex backend, on this Account if one is chosen.
+
+    One place decides what an Account means to the pool, so the turn that takes
+    a process, the drop that gives it up and the usage report that reads it can
+    never disagree about which Account's process they are talking about.
+    """
+    return backend_pool.pool_key(
+        BACKEND_CODEX, account=None if account is None else account.account_id
     )
 
 
-def _questions(
-    raw: object,
-    *,
-    multi_key: str = "",
-    custom_key: str = "",
-    secret_key: str = "",
-    id_key: str = "",
-) -> tuple[Question, ...]:
-    """Read a provider's list of question dicts into BlindPilot's own shape.
+class AccountDrop(NamedTuple):
+    """What letting go of an Account's Held process did, in terms the caller says.
 
-    All four providers send the same thing — a list of dicts carrying a
-    question, a header and labelled options — and differ only in what they
-    call the flags beside them, and in which of those they send at all. Each
-    key is therefore named by its caller, and a key left empty means the
-    provider has nothing to say on that point and the `Question` default
-    stands: only Codex numbers its questions or marks an answer secret, only
-    opencode and Claude Code ask for more than one answer, and every one of
-    them lets an answer be typed instead of picked.
+    ``waited``: a turn was speaking through the process, so the drop waits for
+    that turn to finish and somebody has to be told so. ``choice_cleared``: the
+    Codex backend was set to this Account, and is now back on Codex's own login.
     """
-    if not isinstance(raw, list):
-        return ()
-    questions: list[Question] = []
-    for entry in raw:
-        if not isinstance(entry, dict):
-            continue
-        text = str(entry.get("question") or "").strip()
-        if not text:
-            continue
-        options = _question_options(entry.get("options"))
-        questions.append(
-            Question(
-                question=text,
-                header=str(entry.get("header") or ""),
-                options=options,
-                multi_select=bool(entry.get(multi_key)) if multi_key else False,
-                # A question with no options is a free-text one whatever the
-                # flag says, so the two together decide whether typing is
-                # offered.
-                allow_custom=(bool(entry.get(custom_key)) or not options) if custom_key else True,
-                secret=bool(entry.get(secret_key)) if secret_key else False,
-                id=str(entry.get(id_key) or "") if id_key else "",
-            )
-        )
-    return tuple(questions)
+
+    waited: bool = False
+    choice_cleared: bool = False
 
 
-def _codex_questions(raw: object) -> tuple[Question, ...]:
+def drop_codex_plan_account(account_id: int) -> bool:
+    """Drop what Codex holds for this Account, now or once its turn finishes.
+
+    Signing out of an Account, deleting it, or choosing another one takes its
+    Held process away: nothing may be sent on a credential that has just been
+    ended, and nothing on a process whose Account is no longer chosen. A turn
+    already running through it is never interrupted -- it finishes on the token
+    it started with, which is what switching promises -- so the drop waits for
+    it and returns True, which is the caller's cue to say the wait out loud.
+
+    The start lock is the turn's own, so a turn between being handed this
+    process and being counted in it cannot be dropped underneath. It is never
+    waited for here: a turn holds it across a launch, which runs the token
+    command and starts a process, and this is called from the window's thread.
+    Not getting it means a turn is launching right now, which is reason enough
+    to owe the drop and say it is waiting.
+    """
+    key = codex_pool_key(PlanAccount(account_id=account_id))
+    pool = backend_pool.pool()
+    if not _CODEX_START_LOCK.acquire(blocking=False):
+        pool.wait_to_drop(key)
+        return True
+    try:
+        return pool.drop_when_idle(key)
+    finally:
+        _CODEX_START_LOCK.release()
+
+
+def drop_pending_codex_processes() -> None:
+    """Carry out the drops owed by finished turns, now that it is safe to.
+
+    Called as a turn hands its process back, which is where a wait owed to that
+    turn is paid. The start lock is taken without waiting, because a turn holds
+    it from taking a process to being counted in it, and a drop landing in that
+    gap would stop the very process the next turn has just been handed. Not
+    getting it means a turn is being handed one right now: the keys stay owed,
+    and the next turn to finish asks again.
+
+    A choice of Account that was waiting for a turn is applied here too, for
+    the same reason and at the same moment: the turn it was waiting for has
+    just finished.
+    """
+    if _CODEX_START_LOCK.acquire(blocking=False):
+        try:
+            backend_pool.pool().drop_pending()
+        finally:
+            _CODEX_START_LOCK.release()
+    _apply_pending_plan_choice()
+
+
+# ----- Choosing another Account while a turn is running -----
+#
+# A turn already running finishes on the Account it started with, so the switch
+# cannot take effect while it runs: the choice is made, said, and kept here
+# until the turn that blocked it hands its process back (see
+# `drop_pending_codex_processes`). Until then the saved choice -- and so the
+# Account every new conversation is bound to -- is still the one being left.
+
+_PENDING_CHOICE_LOCK = threading.Lock()
+_pending_choice: Optional[PlanAccount] = None
+_pending_choice_owed = False
+
+
+class AccountSwitch(NamedTuple):
+    """What choosing another Account for Codex did, in terms the caller says.
+
+    ``saved``: the choice in the settings file is now the one asked for.
+    ``waited``: a turn was running on the Account being left, so it is not --
+    the switch happens when that turn finishes, and somebody has to be told so.
+    """
+
+    saved: bool = False
+    waited: bool = False
+
+
+class PendingSwitch(NamedTuple):
+    """A switch waiting for a turn, if there is one, and the Account it names."""
+
+    owed: bool = False
+    account: Optional[PlanAccount] = None
+
+
+def switch_codex_plan_account(account: Optional[PlanAccount]) -> AccountSwitch:
+    """Choose the Account the Codex backend uses, now or once its turn finishes.
+
+    Nothing is running: the choice is saved and the Account being left has its
+    process dropped, so the next conversation starts on the new Account.
+
+    A turn is running on the Account being left: it finishes on that Account,
+    which is what switching promises, so the choice is kept rather than saved
+    and takes effect when the turn hands its process back. The caller is told
+    it is waiting so it can say so; a switch that silently waits is one nobody
+    knows to wait for.
+
+    The start lock is the turn's own, so this answers without queueing behind a
+    turn that is launching a process (see `drop_codex_plan_account`).
+    """
+    global _pending_choice, _pending_choice_owed
+
+    previous = codex_plan_account()
+    same = (
+        account is not None and previous is not None and account.account_id == previous.account_id
+    )
+    if previous is None or same:
+        # Nothing is being left -- Codex's own login either way, or the same
+        # Account under a new name -- so there is no process to wait for.
+        return AccountSwitch(save_codex_plan_account(account), waited=False)
+    if not drop_codex_plan_account(previous.account_id):
+        return AccountSwitch(save_codex_plan_account(account), waited=False)
+    with _PENDING_CHOICE_LOCK:
+        _pending_choice = account
+        _pending_choice_owed = True
+    return AccountSwitch(saved=False, waited=True)
+
+
+def pending_codex_plan_account() -> PendingSwitch:
+    """The switch waiting for a turn to finish, if one is waiting."""
+    with _PENDING_CHOICE_LOCK:
+        return PendingSwitch(_pending_choice_owed, _pending_choice)
+
+
+def _forget_pending_plan_choice(account_id: int) -> None:
+    """Drop a switch that names an Account which is no longer usable."""
+    global _pending_choice, _pending_choice_owed
+
+    with _PENDING_CHOICE_LOCK:
+        account = _pending_choice
+        if account is not None and account.account_id == int(account_id):
+            _pending_choice = None
+            _pending_choice_owed = False
+
+
+def _apply_pending_plan_choice() -> None:
+    """Save the choice that was waiting for a turn, if that turn has finished.
+
+    Asked where a turn hands its process back. A process another tab is still
+    speaking through is left where it is, and the choice stays owed: the wait
+    is for all of the turns running on the Account being left, not for
+    whichever of them finishes first. A write the file refuses also leaves it
+    owed, so the next turn to finish asks again rather than the choice being
+    lost in silence.
+    """
+    global _pending_choice, _pending_choice_owed
+
+    with _PENDING_CHOICE_LOCK:
+        if not _pending_choice_owed:
+            return
+        choice = _pending_choice
+    previous = codex_plan_account()
+    if previous is not None and backend_pool.pool().busy(codex_pool_key(previous)):
+        return
+    if not save_codex_plan_account(choice):
+        return
+    with _PENDING_CHOICE_LOCK:
+        _pending_choice = None
+        _pending_choice_owed = False
+
+
+def forget_codex_plan_account(account_id: int) -> AccountDrop:
+    """Stop using an Account for Codex, and drop the process it was running on.
+
+    For the three ways an Account stops being usable -- signed out, deleted, or
+    switched away from. If it is the Account the backend is set to use, the
+    choice goes back to Codex's own login: a signed-out Account cannot pay for
+    a turn, and a saved id that nothing can run on is a choice that lies about
+    what Codex will use. Everything stays stored but the choice itself, so the
+    control that offers it and the file it is saved in agree.
+
+    The drop is the one `drop_codex_plan_account` makes, with the same wait. A
+    switch still waiting for a turn to finish is dropped if it names this
+    Account, because an Account nobody can run on must not be saved later.
+    """
+    chosen = codex_plan_account()
+    cleared = chosen is not None and chosen.account_id == int(account_id)
+    if cleared:
+        save_codex_plan_account(None)
+    _forget_pending_plan_choice(int(account_id))
+    return AccountDrop(drop_codex_plan_account(int(account_id)), cleared)
+
+
+def plan_token_command(account_id: int) -> tuple[str, ...]:
+    """The command that prints one access token for an account and exits.
+
+    Codex runs it itself, from whatever folder it was started in. A frozen
+    build's ``sys.executable`` is BlindPilot, whose entry point answers the flag
+    before importing the window; from source it is a Python, so it is given the
+    entry point by absolute path rather than relying on a working directory.
+    """
+    tail = (plan_token.FLAG, str(int(account_id)))
+    if getattr(sys, "frozen", False):
+        return (sys.executable, *tail)
+    entry = Path(__file__).resolve().with_name("blind_pilot.py")
+    return (sys.executable, str(entry), *tail)
+
+
+def codex_plan_args(account_id: int) -> tuple[str, ...]:
+    """Arguments that put Codex on the plan's Responses endpoint through the relay.
+
+    The token is not among them: Codex runs the token command beside them to
+    obtain its own bearer token, and runs it again on an interval. Quoted as
+    TOML strings because ``-c`` parses its value as TOML; ``ensure_ascii`` is
+    off for the paths, since JSON would write a character outside the BMP as an
+    escaped surrogate pair, which TOML refuses.
+    """
+    provider = f"model_providers.{PLAN_PROVIDER_ID}"
+    command = plan_token_command(account_id)
+    overrides = (
+        ("model_provider", json.dumps(PLAN_PROVIDER_ID)),
+        (f"{provider}.name", json.dumps("OpenAI")),
+        (
+            f"{provider}.base_url",
+            json.dumps(plan_relay.plan_base_url(ssl_context=certificates.certificate_context())),
+        ),
+        (f"{provider}.wire_api", json.dumps("responses")),
+        (f"{provider}.supports_websockets", "false"),
+        # requires_openai_auth is deliberately absent: Codex's reference says
+        # not to combine it with auth, and its default is already false.
+        (f"{provider}.auth.command", json.dumps(command[0], ensure_ascii=False)),
+        (f"{provider}.auth.args", json.dumps(list(command[1:]), ensure_ascii=False)),
+        (f"{provider}.auth.refresh_interval_ms", str(PLAN_TOKEN_REFRESH_MS)),
+        (f"{provider}.auth.timeout_ms", str(PLAN_TOKEN_TIMEOUT_MS)),
+    )
+    args: list[str] = []
+    for key, value in overrides:
+        args += ["-c", f"{key}={value}"]
+    return tuple(args)
+
+
+def _codex_questions(raw: object) -> tuple[questions.Question, ...]:
     """Read request_user_input's params into BlindPilot's own question shape.
 
     `isOther` is Codex asking for the "Other" answer its tool description
     tells the model not to write itself.
     """
-    return _questions(raw, custom_key="isOther", secret_key="isSecret", id_key="id")
+    return questions._questions(raw, custom_key="isOther", secret_key="isSecret", id_key="id")
 
 
 # How long a failing Codex turn waits for the last line of stderr, which is
@@ -3794,13 +3621,13 @@ class CodexServer:
 
     def stop(self) -> None:
         try:
-            end_process_group(self.proc, timeout=2)
+            process_utils.end_process_group(self.proc, timeout=2)
         finally:
             # Both happen even when the process had already exited: waiting
             # turns must still be woken, and the pipe handles must still be
             # released.
             self._close("")
-            _close_process_pipes(self.proc)
+            process_utils._close_process_pipes(self.proc)
 
 
 def _app_version() -> str:
@@ -3813,14 +3640,72 @@ def _app_version() -> str:
     return str(getattr(app, "APP_VERSION", "") or "unknown")
 
 
-def _start_codex_server(binary: str = "") -> CodexServer:
-    """Launch the shared app-server. Raises OSError if it cannot be started."""
+def _run_token_command(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    """Run the plan-token command once and hand back what it printed and said."""
+    return subprocess.run(
+        list(command),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=PLAN_TOKEN_TIMEOUT_MS / 1000.0,
+        **process_utils.no_window_kwargs(),
+    )
+
+
+def _plan_token_failure(account: PlanAccount, reason: str) -> str:
+    return (
+        f"The ChatGPT-plan account {account.label} could not be used for Codex: "
+        f"its token command failed. {reason}"
+    )
+
+
+def _plan_token_or_report(account: PlanAccount) -> None:
+    """Fetch a token now, so a broken credential is reported instead of a turn.
+
+    Codex runs this same command itself before each request, and a failure there
+    reaches the person as a turn that came back with nothing said. Running it
+    here makes the failure an error naming the account, before any process is
+    started. It costs one process and its exchange; the chat path refreshes
+    again when it first asks, since nothing but the stored record is shared.
+    """
+    command = plan_token_command(account.account_id)
+    try:
+        done = _run_token_command(command)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PlanTokenError(_plan_token_failure(account, str(exc).strip())) from exc
+    printed = (done.stdout or "").strip()
+    if done.returncode == 0 and printed:
+        return
+    said = [line.strip() for line in (done.stderr or "").splitlines() if line.strip()]
+    reason = said[-1].removeprefix("error:").strip() if said else ""
+    raise PlanTokenError(
+        _plan_token_failure(
+            account, reason or f"it exited with {done.returncode} and printed no token"
+        )
+    )
+
+
+def _start_codex_server(
+    binary: str = "", plan_account: Optional[PlanAccount] = None
+) -> CodexServer:
+    """Launch the shared app-server. Raises OSError if it cannot be started.
+
+    Given a ``plan_account``, the server runs on that ChatGPT-plan account: it is
+    pointed at OpenAI's Responses endpoint and runs ``plan_token_command`` to
+    obtain its own bearer token. Without one, Codex uses whatever login the user
+    already has, which is the behaviour every existing setup relies on.
+    """
     binary = binary or find_backend_cli(BACKEND_CODEX) or ""
     if not binary:
         raise OSError("Codex is not installed. Run: npm install -g @openai/codex")
     server_binary = _codex_app_server_binary(binary)
+    plan: tuple[str, ...] = ()
+    if plan_account is not None:
+        _plan_token_or_report(plan_account)
+        plan = codex_plan_args(plan_account.account_id)
     proc = owned_popen(
-        [server_binary, *codex_question_args(), "app-server", "--stdio"],
+        [server_binary, *plan, *codex_question_args(), "app-server", "--stdio"],
         cwd=str(Path.home()),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -3833,8 +3718,8 @@ def _start_codex_server(binary: str = "") -> CodexServer:
         # npm's `codex` is a Node launcher that runs the real Codex as a child
         # of its own; stopping only the launcher leaves that child holding the
         # app-server session.
-        **own_group_kwargs(),
-        **no_window_kwargs(),
+        **process_utils.own_group_kwargs(),
+        **process_utils.no_window_kwargs(),
     )
     server = CodexServer(proc)
     server.start_readers()
@@ -3906,9 +3791,10 @@ class _TurnWorker(threading.Thread):
         on_complete: Callable[[str], None],
         on_failed: Callable[[str], None],
         on_done: Callable[[], None],
-        on_question: Optional[AskQuestions] = None,
+        on_question: Optional[questions.AskQuestions] = None,
         on_permission: Optional[Callable[[str, dict, list], dict]] = None,
         on_subagent: Optional[SubagentReport] = None,
+        plan_account: object = UNBOUND,
     ) -> None:
         super().__init__(daemon=True)
         self._prompt = prompt
@@ -3933,6 +3819,10 @@ class _TurnWorker(threading.Thread):
         self._on_question = on_question
         self._on_permission = on_permission
         self._on_subagent = on_subagent or ignore_subagents
+        # The Account the turn's conversation is bound to, or `UNBOUND` to take
+        # the saved choice. Only Codex reads this; the rest never see one. It
+        # is `object` because `None` is itself a binding -- Codex's own login.
+        self._plan_account = plan_account
         self._cancelled = False
         # Set once the turn's ending has been reported, whichever way it
         # ended. The first account of a failure is the one that can be acted
@@ -4038,6 +3928,15 @@ class CodexWorker(_TurnWorker):
         # Borrowed from the pool, which starts and stops it; other tabs read it too.
         self._server: Optional[CodexServer] = None
         self._held: Optional[backend_pool.HeldProcess] = None
+        # The pool key this turn borrowed its process under, which carries the
+        # Account it runs on. Remembered rather than recomputed, so a choice
+        # changed while the turn is running cannot make the turn give up
+        # somebody else's process.
+        self._pool_key: Optional[tuple] = None
+        # `_plan_account` -- the Account this turn runs on, or None for Codex's
+        # own login -- is the base class's, given by the tab that owns the
+        # conversation. What decides whether a refusal is a plan's, and so
+        # whether it is reported in the chat half's words.
         # Where this turn's stderr begins in a process older than the turn.
         self._stderr_mark = 0
         # This turn's queue, read by it alone. Unbounded, because a turn's own
@@ -4063,6 +3962,11 @@ class CodexWorker(_TurnWorker):
         # session id names a conversation that no longer exists, and the
         # window clears it so the next message starts a new one.
         self.lost_session = False
+        # Set when the Account this conversation runs on could not produce a
+        # token, so nothing was started on it. The window lets go of that
+        # Account while no conversation has begun, where retrying its dead id
+        # would fail every turn.
+        self.plan_token_failed = False
         # True from the moment `turn/start` goes out, before any id names it.
         self._turn_requested = False
         # Decides whether the turn was asked for or the cancel landed first.
@@ -4281,6 +4185,10 @@ class CodexWorker(_TurnWorker):
         if self._borrowed:
             self._borrowed = False
             server.give_back()
+            # A turn that has just finished may be the last one on a process
+            # whose Account was signed out, deleted or switched away from while
+            # it ran. That drop was waiting for exactly this.
+            drop_pending_codex_processes()
 
     def _borrow_server(self) -> Optional[backend_pool.HeldProcess]:
         """The app-server this turn will speak through, or None having failed.
@@ -4288,8 +4196,26 @@ class CodexWorker(_TurnWorker):
         Taking and handing back happen under one lock so that two tabs sending
         their first Codex message together cannot each launch a server, with
         the second one kept displacing and stopping the first mid-turn.
+
+        Which process this is depends on the Account the conversation is bound
+        to: the tabs on one Account share its process, and a tab on another
+        Account is given -- or starts -- that Account's own. A conversation
+        resumed from history comes through here too, so it lands on the Account
+        its conversation was held under rather than on whichever tab resumed
+        it.
+
+        The Account is the tab's answer, taken when the conversation began, and
+        only a turn told `UNBOUND` reads the saved choice -- once, and then it
+        is this turn's too. So choosing another Account cannot move a
+        conversation that has already started, and the rest of a running turn
+        cannot be sent somewhere else under it.
         """
-        key = backend_pool.pool_key(BACKEND_CODEX)
+        account = self._plan_account
+        if account is UNBOUND:
+            account = codex_plan_account()
+        account = cast(Optional[PlanAccount], account)
+        self._plan_account = account
+        key = codex_pool_key(account)
         shared = backend_pool.pool()
         with _CODEX_START_LOCK:
             held = shared.take(key)
@@ -4298,8 +4224,9 @@ class CodexWorker(_TurnWorker):
             reused = held is not None
             if held is None:
                 try:
-                    started = _start_codex_server()
+                    started = _start_codex_server(plan_account=account)
                 except OSError as exc:
+                    self.plan_token_failed = isinstance(exc, PlanTokenError)
                     self._fail(f"Failed to launch Codex: {exc}")
                     return None
                 held = backend_pool.HeldProcess(started, codex_adapter())
@@ -4313,6 +4240,7 @@ class CodexWorker(_TurnWorker):
                     self._fail(detail)
                     return None
             shared.keep(key, held)
+            self._pool_key = key
             # Registered under the same lock the drop takes, so a turn that
             # has been handed this server is never counted as absent by a turn
             # deciding whether anyone still wants it.
@@ -4341,14 +4269,19 @@ class CodexWorker(_TurnWorker):
         exactly the turn that must not have its process stopped underneath it.
         This must never be the way one conversation's bad session id ends
         another's live turn.
+
+        Dropped under the key this turn borrowed, which remembers the Account
+        the process was started on: a choice changed mid-turn must not take a
+        different Account's process down with it.
         """
         server = self._server
         if server is None:
             return
+        key = self._pool_key or codex_pool_key()
         with _CODEX_START_LOCK:
             if server.borrower_count() > 1:
                 return
-            backend_pool.pool().drop(backend_pool.pool_key(BACKEND_CODEX))
+            backend_pool.pool().drop(key)
 
     @staticmethod
     def _policy(mode: str) -> tuple[str, dict]:
@@ -4809,6 +4742,10 @@ class CodexWorker(_TurnWorker):
         last one written, which is exactly the one still in flight. Everything
         earlier is already in the list, so the race did not lose noise, it lost
         the reason, and it lost it differently each time.
+
+        Codex's words are passed on as Codex wrote them: a ChatGPT-plan failure
+        this app can name is one its own token command failed on, and that is
+        reported where the command is run.
         """
         self._await_last_words()
         detail = "\n".join(self._stderr_lines[-10:]).strip()
@@ -4826,8 +4763,7 @@ class CodexWorker(_TurnWorker):
         if server is not None:
             server.await_last_words(_CODEX_LAST_WORDS_SECONDS)
 
-    @staticmethod
-    def _error_text(error: object, fallback: str) -> str:
+    def _error_text(self, error: object, fallback: str) -> str:
         if isinstance(error, dict):
             message = error.get("message")
             if isinstance(message, str) and message:
@@ -4890,14 +4826,14 @@ class CodexWorker(_TurnWorker):
         "the person had nothing to say to this" — the turn then carries on
         rather than waiting for an answer that is not coming.
         """
-        questions = _codex_questions(params.get("questions"))
-        answers = self._on_question(questions) if (questions and self._on_question) else None
-        self._on_activity("tool", question_summary(questions, answers))
+        asked = _codex_questions(params.get("questions"))
+        answers = self._on_question(asked) if (asked and self._on_question) else None
+        self._on_activity("tool", questions.question_summary(asked, answers))
         payload = {
             question.id or question.question: {
                 "answers": answers[index] if answers is not None and index < len(answers) else []
             }
-            for index, question in enumerate(questions)
+            for index, question in enumerate(asked)
         }
         self._send({"id": request_id, "result": {"answers": payload}})
 
@@ -5321,7 +5257,7 @@ def _freebuff_question_box(visible: str) -> list[str]:
     return body
 
 
-def _freebuff_open_question(visible: str) -> tuple[int, int, Optional[Question]]:
+def _freebuff_open_question(visible: str) -> tuple[int, int, Optional[questions.Question]]:
     """(how many questions there are, which one is open, and that question).
 
     FreeBuff shows one question's answers at a time and keeps the rest folded
@@ -5334,7 +5270,7 @@ def _freebuff_open_question(visible: str) -> tuple[int, int, Optional[Question]]
     total = 0
     open_index = -1
     text = ""
-    options: list[QuestionOption] = []
+    options: list[questions.QuestionOption] = []
     multi = False
     for line in body:
         header = _FREEBUFF_QUESTION_RE.match(line)
@@ -5359,12 +5295,16 @@ def _freebuff_open_question(visible: str) -> tuple[int, int, Optional[Question]]
         if option:
             if option.group(1) in _FREEBUFF_CHECKBOXES:
                 multi = True
-            options.append(QuestionOption(option.group(2)))
+            options.append(questions.QuestionOption(option.group(2)))
     if open_index < 0 or not text:
         return total, -1, None
     if options and options[-1].label == _FREEBUFF_CUSTOM_LABEL:
         options = options[:-1]
-    return total, open_index, Question(question=text, options=tuple(options), multi_select=multi)
+    return (
+        total,
+        open_index,
+        questions.Question(question=text, options=tuple(options), multi_select=multi),
+    )
 
 
 # How long a frame must hold still before it is read out. The terminal repaints
@@ -5807,7 +5747,7 @@ def _freebuff_new_chat_path(before: dict[str, float], cwd: str, pid: int = 0) ->
     new_ids = set(after) - set(before)
     if not new_ids:
         return None
-    family = _descendant_pids({pid}) if pid else set()
+    family = process_utils._descendant_pids({pid}) if pid else set()
     for chat_id in sorted(new_ids, key=lambda chat_id: after[chat_id], reverse=True):
         target = _freebuff_chat_path(cwd, chat_id)
         if target is None:
@@ -6374,7 +6314,7 @@ def _spawn_freebuff_pty(
                     elif now > grace_until:
                         return
                 try:
-                    hide_console_windows(roots)
+                    process_utils.hide_console_windows(roots)
                 except Exception:
                     # Never let this thread die: it is the only thing
                     # keeping the terminal off the screen for the whole run.
@@ -6452,7 +6392,7 @@ class _HiddenConsoleProcess:
         return self._proc.poll() is None
 
     def terminate(self, force: bool = False) -> None:
-        end_process_group(self._proc)
+        process_utils.end_process_group(self._proc)
 
     def close(self, force: bool = False) -> None:
         try:
@@ -6492,7 +6432,7 @@ def _spawn_hidden_console(args: list[str], cwd: str) -> object:
         started = time.monotonic()
         while proc.poll() is None:
             try:
-                hide_console_windows(roots)
+                process_utils.hide_console_windows(roots)
             except Exception:
                 # Never let this thread die: it is the only thing keeping the
                 # console off screen for the whole run.
@@ -7401,18 +7341,18 @@ class FreebuffWorker(_TurnWorker):
         refresh(0.5)
         return True
 
-    def _ask_one(self, question: Question) -> Optional[list[str]]:
+    def _ask_one(self, question: questions.Question) -> Optional[list[str]]:
         """Put one question to the person. None if they closed the dialog."""
         if self._on_question is None:
             return None
         answers = self._on_question([question])
         chosen = answers[0] if answers else None
-        self._on_activity("tool", question_summary([question], answers))
+        self._on_activity("tool", questions.question_summary([question], answers))
         if not chosen:
             return None
         return chosen
 
-    def _choose(self, question: Question, chosen: list[str]) -> None:
+    def _choose(self, question: questions.Question, chosen: list[str]) -> None:
         """Walk the box to the chosen answers and take them."""
         # The focus opens on the first answer, and "Custom" sits one past the
         # last of the model's own, which is where anything typed goes.
@@ -7798,8 +7738,8 @@ class OpencodeServer:
                 encoding="utf-8",
                 errors="replace",
                 env=env,
-                **own_group_kwargs(),
-                **no_window_kwargs(),
+                **process_utils.own_group_kwargs(),
+                **process_utils.no_window_kwargs(),
             )
             threading.Thread(target=self._pump, daemon=True).start()
             self._listening.wait(60)
@@ -7883,12 +7823,12 @@ class OpencodeServer:
                         proc.wait(timeout=5)
                     except (OSError, subprocess.TimeoutExpired):
                         pass
-                end_process_group(proc, timeout=5)
+                process_utils.end_process_group(proc, timeout=5)
         finally:
             # Released whether the process was stopped just now or had already
             # exited on its own: a dead server's stdout pipe is still a handle
             # until something closes it.
-            _close_process_pipes(proc)
+            process_utils._close_process_pipes(proc)
 
 
 def opencode_server() -> OpencodeServer:
@@ -7994,7 +7934,7 @@ def _opencode_models_from_cli() -> list[str]:
             errors="replace",
             timeout=60,
             env=subprocess_env(binary),
-            **no_window_kwargs(),
+            **process_utils.no_window_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -8267,7 +8207,7 @@ def _poison_history_error(text: str) -> bool:
     return bool(_POISON_HISTORY_RE.search(text or ""))
 
 
-def _opencode_questions(raw: object) -> tuple[Question, ...]:
+def _opencode_questions(raw: object) -> tuple[questions.Question, ...]:
     """Read a question.asked event into BlindPilot's own question shape.
 
     opencode's own flags are `multiple` for more than one answer and `custom`
@@ -8275,7 +8215,7 @@ def _opencode_questions(raw: object) -> tuple[Question, ...]:
     model not to offer an "Other" of its own because the client adds one, so a
     typed answer is offered whether or not `custom` was set.
     """
-    return _questions(raw, multi_key="multiple")
+    return questions._questions(raw, multi_key="multiple")
 
 
 # Magic bytes to media types for attached pictures. The server has no upload
@@ -9132,9 +9072,9 @@ class OpencodeWorker(_TurnWorker):
         request_id = str(properties.get("id") or "")
         if not request_id or self._server is None:
             return
-        questions = _opencode_questions(properties.get("questions"))
-        answers = self._on_question(questions) if (questions and self._on_question) else None
-        self._on_activity("tool", question_summary(questions, answers))
+        asked = _opencode_questions(properties.get("questions"))
+        answers = self._on_question(asked) if (asked and self._on_question) else None
+        self._on_activity("tool", questions.question_summary(asked, answers))
         if answers is None:
             self._post(
                 [

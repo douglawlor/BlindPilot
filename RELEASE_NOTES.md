@@ -1,3 +1,40 @@
+# BlindPilot 0.55.11
+
+- Fixed: Codex turns funded by a ChatGPT-plan Account no longer fail before the model is asked with `subscription_sharing_unsupported_capability`. Plan turns now go through a loopback relay inside the app that drops the conversation items the plan endpoint refuses (configuration updates, compaction triggers, shell and other unsupported call/output items) and forwards everything else unchanged, streaming the reply back; Codex's own login never goes through the relay. The same change removes the shared plan-token cache (a process that waited for a token rotation now re-reads the record and does its own exchange) and stops translating Codex's own refusal text. From Farhan Khan, PR #148, fixing #147.
+
+# BlindPilot 0.55.10
+
+- Fixed: a Codex conversation bound to a ChatGPT-plan Account that was deleted or signed out no longer retries that dead Account on every turn. The failed turn still reports the failure, but the conversation now lets go of the binding when nothing has started on that Account, so the next turn takes the saved choice again — already back on Codex's own login after the deletion. A conversation that already has a thread keeps its Account, since a thread cannot move to another login. From Farhan Khan, PR #146, fixing #145.
+
+# BlindPilot 0.55.9
+
+- New: one Continue with ChatGPT sign-in now serves both Chat and the Codex coding backend, so nobody logs in twice for one plan. Codex runs on the plan through its own command-line configuration, fetching its token from the app's --print-plan-token mode — the token reaches neither the app-server's command line nor its environment, and the user's own Codex configuration is never written. Refresh is serialized across processes with the stored record replaced atomically; the process pool is keyed by Account, so two Accounts hold two processes and a conversation keeps the Account it began on; the account dialog's Codex choice is a labelled, keyboard-operable control that announces its value; sign-out and switching drop only that Account's process, and never while a turn is live. Codex's own login remains available and unchanged. From Farhan Khan, PR #143, landed via replacement PR #144. Design record: ADR 0003 and docs/chatgpt-sign-in-design.md.
+- Fixed (test suite): the account-choice fixture no longer overrides the directory-migration tests, the Codex launch capture stubs the CLI lookup so the account test no longer needs a real codex binary installed, and tests/doubles.py is formatted for the current ruff — the three clean-runner CI failures #143 arrived with.
+
+# BlindPilot 0.55.8
+
+- Fixed: a Muse.ai follow test left its working cue running after the test ended, and the leaked cue thread kept spawning a player that a later test counted as its own launch — the macOS-only failure on PRs #139 and #140. The test now stops the cue in teardown, the same way closing a tab does. From Farhan Khan, PR #141.
+- Docs: the responsiveness ticket plan's final gate count is corrected. From Farhan Khan, PR #140.
+
+# BlindPilot 0.55.7
+
+- Fixed: a resumed Muse.ai tab queued its pending send with nothing re-checked when the send actually fired, so it could land after the tab's backend had changed. The deferred send now carries a serial and re-checks it plus both backend fields before sending. From Farhan Khan, PR #139.
+- Docs: ADR 0001 records the GUI-thread budget (callbacks stay within 50 ms, no waiting, process starts, or network work on the GUI thread) and the shutdown and process-ownership decision; AGENTS.md links it from a new GUI callbacks section, and the responsiveness ticket records are updated.
+
+# BlindPilot 0.55.6
+
+- Changed: question handling and shared process utilities now live in focused modules of their own — question types and parsing in questions.py, the question dialog in question_dialog.py, and shared process-group, pipe-cleanup and console-window helpers in process_utils.py — so unrelated changes are easier to isolate and review. Windows Job Object ownership stays in owned_process.py under ADR 0001. From Farhan Khan's spec #134, issues #135, #136 and #137, PR #138.
+- Fixed: in the question dialog, selecting "Other" now announces which question's custom-answer field appeared and how to Tab to it, instead of a generic message; multi-select questions now show the previews of all selected options together, each labelled; and long question sets scroll, so every question stays reachable.
+
+# BlindPilot 0.55.5
+
+- Fixed: a structured question block a turn wrote into its answer could be lost when the turn went on to write about the block itself, because only the last block was read and the later samples are not the JSON they claim to be. The last usable block now wins. Blocks fenced with ~~~ are read as well as ones fenced with backticks, and a single question written as one object is taken. From Farhan Khan, PR #133.
+- Docs: the README now says which backends support permission modes (FreeBuff has none, and muse.ai manages its own approvals) and that running from source uses Python 3.12, the version CI and releases use.
+
+# BlindPilot 0.55.4
+
+- Changed: dialogs now share one background-task lifecycle, so the slow work they start is tracked and shut down the same way instead of each dialog managing its own. From Farhan Khan, PR #131.
+
 # BlindPilot 0.55.3
 
 - Fixed: the window could freeze - keyboard focus and screen-reader speech stalling - while BlindPilot did slow work such as cloning a repository, checking a setup tool, resuming history, creating a desktop shortcut, or quitting with backends still running. Those actions now run in the background under the 50 ms GUI responsiveness budget (spec #125), and quitting ends the backend processes BlindPilot started instead of leaving them behind. From Farhan Khan's PRs #128 and #129, landed as #130.
