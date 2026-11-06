@@ -42,6 +42,10 @@ def test_the_functions_are_shared_by_import():
 def test_the_reader_state_is_read_through_the_module(monkeypatch):
     # The bug report says how announcements reach the reader. It has to see
     # the connection as it is now, not as it was when the module was imported.
+    # Windows is the branch that reports it; macOS and Linux answer with
+    # their own line and never look at the connection.
+    monkeypatch.setattr(blindpilot_app.platform, "system", lambda: "Windows")
+
     monkeypatch.setattr(screen_speech, "_SPEAKER", object())
     assert blindpilot_app._speech_route() != "none found"
 
