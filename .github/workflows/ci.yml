@@ -117,7 +117,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-wxgtk4.0 xvfb libsdl2-2.0-0
+          sudo apt-get install -y --no-install-recommends python3-wxgtk4.0 xvfb libsdl2-2.0-0 libwebkit2gtk-4.1-0
           # PyPI has no Linux wheel for wxPython, only a source archive that
           # needs the GTK development headers and the better part of an hour.
           # requirements.txt points pip at the distro wheel wxPython itself
@@ -125,6 +125,15 @@ jobs:
           # runtime libraries that wheel links against, and libsdl2-2.0-0
           # covers the SDL2 library the 4.3 wheel needs and nothing else
           # here pulls in.
+          #
+          # libwebkit2gtk-4.1-0 is here for the conversation browser test.
+          # That test imports wx.html2, which loads WebKitGTK when it is
+          # imported, and pytest.importorskip only skips a module that is
+          # cleanly absent. A missing shared library raises ImportError
+          # from inside wx.html2, so pytest stops with a collection error
+          # and the whole Linux run fails before a single test is run. The
+          # package brings in GTK and the GStreamer libraries it needs as
+          # hard dependencies, so nothing else has to be named here.
           python3 -m venv --system-site-packages .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 

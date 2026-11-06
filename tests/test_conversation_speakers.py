@@ -16,8 +16,8 @@ def test_history_document_uses_the_recorded_backend(backend):
     dialog = SimpleNamespace(_entry=entry, _title=entry.title)
     speaker = app.backend_label(backend)
     turns = [HistoryTurn(prompt="Question", response="Answer")]
-    fragment = app.ConversationWebViewDialog._conversation_html(dialog, turns)
-    text = app.ConversationWebViewDialog._conversation_text(dialog, turns)
+    fragment = app.ConversationWebViewPanel._conversation_html(dialog, turns)
+    text = app.ConversationWebViewPanel._conversation_text(dialog, turns)
     assert f"<h2>{speaker}, exchange 1</h2>" in fragment
     assert f"{speaker}, exchange 1\nAnswer" in text
 

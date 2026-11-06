@@ -2,6 +2,10 @@
 
 Release history for BlindPilot, newest first. Entries are short by design. The reasoning behind each change is in the commit messages.
 
+## Unreleased
+
+- Ctrl+Enter or Shift+Enter in Recent Conversations and Hermes Conversations now opens a reading tab in the main window. Ctrl+Tab switches tabs, F6 moves between the document and the tab strip, and Ctrl+W or Escape closes the reading tab and returns to its originating session when available. A conversation that finishes loading in a background tab does not take focus or interrupt speech.
+
 ## v0.52.7 - 2026-11-02
 
 - Conversation lists (Recent Conversations, Hermes Conversations) can now read the selected conversation in an accessible web view. The web view uses wx-accessible-webview's AccessibleWebView to render the conversation as HTML: the conversation title is the one heading of level one, each exchange is a heading under it, the reading cursor is put into the conversation when it opens, and Escape closes it from inside the conversation. Nothing a conversation names is fetched by the web view showing it. Enter still opens the conversation in a new tab, the way the Open button does; Ctrl+Enter (or Shift+Enter) opens the web view instead.

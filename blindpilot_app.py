@@ -5661,8 +5661,8 @@ class ReadView(wx.Dialog):
         event.Skip()
 
 
-class ConversationWebViewDialog(wx.Dialog):
-    """Accessible web view for a full conversation.
+class ConversationWebViewPanel(wx.Panel):
+    """A read-only conversation in a tab of the main window.
 
     Uses a modern native browser to render the conversation
     as HTML so it reads correctly in NVDA and JAWS. The conversation is
@@ -5679,16 +5679,19 @@ class ConversationWebViewDialog(wx.Dialog):
         entry: HistoryEntry,
         title: str,
         missing: str = "No messages found in this conversation.",
+        *,
+        on_close: Callable[["ConversationWebViewPanel"], None],
+        on_command: Optional[Callable[[str], None]] = None,
     ):
-        super().__init__(
-            parent,
-            title=title,
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
-        )
+        super().__init__(parent, name=f"Read: {title}")
 
         self._entry = entry
         self._title = title
         self._missing = missing
+        self._on_close = on_close
+        self._on_command = on_command
+        self.return_to: Optional[wx.Window] = None
+        self.last_status = "Loading conversation"
         # The browser adapter is imported only when a conversation is opened.
         self._webview: Optional[Any] = None
         self._text: Optional[wx.TextCtrl] = None
@@ -5713,28 +5716,68 @@ class ConversationWebViewDialog(wx.Dialog):
         buttons.Add(close_button, 0, wx.LEFT, self.FromDIP(8))
         sizer.Add(buttons, 0, wx.ALIGN_RIGHT | wx.ALL, self.FromDIP(PAD_DIALOG))
 
-        self.SetSizerAndFit(sizer)
-        self.SetClientSize(self.FromDIP(wx.Size(800, 600)))
+        self.SetSizer(sizer)
 
         self.Bind(wx.EVT_BUTTON, lambda _e: self._close(), id=wx.ID_CANCEL)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
-        self.Bind(wx.EVT_CLOSE, lambda _e: self._close())
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
 
-        self.CentreOnParent()
         _call_after_alive(self._load_conversation)
 
     def _build_view(self) -> wx.Window:
         """Build a modern browser or its readable native text fallback."""
         from conversation_webview import ConversationWebView
 
-        self._webview = ConversationWebView(self, title=self._title, on_close=self._close)
+        self._webview = ConversationWebView(
+            self,
+            title=self._title,
+            on_close=self._close,
+            can_focus=self._can_focus,
+            on_command=self._on_command,
+        )
         control = self._webview.control
-        # The dialog caption already says which conversation this is. The
+        # The tab already says which conversation this is. The
         # control inside it is named for what it is, so the title is not said
         # three times over.
         control.SetName("Conversation")
-        control.SetMinSize(self.FromDIP(wx.Size(760, 480)))
         return control
+
+    def _is_active(self) -> bool:
+        if self._closed or not self:
+            return False
+        book = self.GetParent()
+        return not isinstance(book, wx.BookCtrlBase) or (
+            book.IsShown() and book.GetCurrentPage() is self
+        )
+
+    def _can_focus(self) -> bool:
+        if not self._is_active():
+            return False
+        frame = wx.GetTopLevelParent(self)
+        strip = getattr(frame, "tab_switcher", None)
+        return not (
+            getattr(frame, "_strip_keeps_focus", False)
+            or (strip is not None and MainFrame._focus_is_within(wx.Window.FindFocus(), strip))
+        )
+
+    def focus_content(self, *, from_navigation: bool = False) -> None:
+        if from_navigation and self._is_active() and self._webview is not None:
+            self._webview.control.SetFocus()
+        if self._can_focus() and self._webview is not None:
+            self._webview.focus()
+
+    def _say_status(self, text: str) -> None:
+        self.last_status = text
+        if self._is_active():
+            frame = wx.GetTopLevelParent(self)
+            status = getattr(frame, "_set_status_text", None)
+            if status is not None:
+                status(text)
+            announce(text)
+
+    def _announce_selected(self, index: int, count: int) -> None:
+        if self._is_active():
+            announce(f"Reading: {self._title}, tab {index + 1} of {count}. {self.last_status}")
 
     def _load_conversation(self) -> None:
         """Read the conversation off the GUI thread, then show it.
@@ -5747,7 +5790,7 @@ class ConversationWebViewDialog(wx.Dialog):
             # conversation" now would be the last thing a window nobody can
             # reach has to say.
             return
-        announce("Loading conversation")
+        self._say_status("Loading conversation")
 
         def work() -> None:
             try:
@@ -5772,11 +5815,11 @@ class ConversationWebViewDialog(wx.Dialog):
         if error:
             if not turns:
                 self._show_text(error)
-                announce(f"Error: {error}")
+                self._say_status(f"Error: {error}")
                 return
         if not turns:
             self._show_text(self._missing)
-            announce(self._missing)
+            self._say_status(self._missing)
             return
         messages = sum(1 for turn in turns for part in (turn.prompt, turn.response) if part.strip())
         view = self._webview if self._webview is not None and self._webview.using_webview else None
@@ -5784,12 +5827,14 @@ class ConversationWebViewDialog(wx.Dialog):
             view.set_content(self._conversation_html(turns))
         else:
             self._show_text(self._conversation_text(turns))
-        announce(f"Conversation loaded: {messages} messages." + (f" {error}" if error else ""))
+        self._say_status(
+            f"Conversation loaded: {messages} messages." + (f" {error}" if error else "")
+        )
         if view is not None:
             # The focus call is what puts the reading cursor in the
             # conversation. The native control taking focus is not enough:
             # without it the reader is left with a dialog and nothing in it.
-            view.focus()
+            self.focus_content()
 
     def _conversation_html(self, turns: List[HistoryTurn]) -> str:
         """The conversation as a document fragment.
@@ -5831,10 +5876,11 @@ class ConversationWebViewDialog(wx.Dialog):
         if control is None:
             if self._webview is not None:
                 self._webview.set_content(f"<p>{html.escape(text)}</p>")
-                self._webview.focus()
+                self.focus_content()
             return
         control.SetValue(text)
-        control.SetFocus()
+        if self._can_focus():
+            control.SetFocus()
 
     def _plain_control(self) -> Optional[wx.TextCtrl]:
         """The box the text is shown in, when there is no web view."""
@@ -5845,8 +5891,9 @@ class ConversationWebViewDialog(wx.Dialog):
         return None
 
     def _close(self) -> None:
-        """Close the dialog, whether Escape or the button asked for it."""
-        self.EndModal(wx.ID_CANCEL)
+        """Ask the notebook owner to remove this page, by identity."""
+        if not self._closed:
+            self._on_close(self)
 
     def _on_key(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_ESCAPE:
@@ -5854,10 +5901,20 @@ class ConversationWebViewDialog(wx.Dialog):
             return
         event.Skip()
 
-    def Destroy(self) -> bool:  # type: ignore[override]
-        # A load already on its way has to know the window is gone: it would
-        # otherwise speak for a window nobody can reach.
+    def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
+        # DeletePage destroys from C++; it need not call Python's Destroy.
+        if event.GetEventObject() is self:
+            self.mark_closed()
+        event.Skip()
+
+    def mark_closed(self) -> None:
         self._closed = True
+        invalidate = getattr(self._webview, "invalidate", None)
+        if invalidate is not None:
+            invalidate()
+
+    def Destroy(self) -> bool:  # type: ignore[override]
+        self.mark_closed()
         return super().Destroy()
 
 
@@ -7837,6 +7894,7 @@ class HistoryDialog(wx.Dialog):
         self._entries: List[HistoryEntry] = []
         self._shown: List[HistoryEntry] = []
         self.entry: Optional[HistoryEntry] = None
+        self.webview_entry: Optional[HistoryEntry] = None
         self._load_serial = 0
         self._loading = False
         self._load_error = ""
@@ -8352,16 +8410,12 @@ class HistoryDialog(wx.Dialog):
         event.Skip()
 
     def _open_in_webview(self) -> None:
-        """Open the selected conversation in an accessible web view (Ctrl+Enter)."""
+        """Return the selected conversation for a reading tab (Ctrl+Enter)."""
         entry = self._current()
         if entry is None:
             return
-        dlg = ConversationWebViewDialog(self, entry, self._title(entry))
-        try:
-            dlg.ShowModal()
-        finally:
-            dlg.Destroy()
-        self.list_box.SetFocus()
+        self.webview_entry = entry
+        self.EndModal(wx.ID_OK)
 
 
 # How long the application waits, in total, for the turns still running when it
@@ -8450,6 +8504,7 @@ class HermesSessionsDialog(wx.Dialog):
         self._shown: list[dict] = []
         self._live: set[str] = set()
         self.entry: Optional[dict] = None
+        self.webview_entry: Optional[HistoryEntry] = None
         self.attaching = False
 
         filter_label = wx.StaticText(self, label="&Filter:")
@@ -8626,7 +8681,7 @@ class HermesSessionsDialog(wx.Dialog):
         title = str(entry.get("title") or entry.get("preview") or "Hermes conversation")
         # The catalog carries the session id, not a file: Hermes keeps every
         # conversation in one store, and the id is what identifies one in it.
-        history_entry = HistoryEntry(
+        self.webview_entry = HistoryEntry(
             backend=BACKEND_HERMES,
             session_id=str(entry.get("id") or ""),
             title=title,
@@ -8635,20 +8690,7 @@ class HermesSessionsDialog(wx.Dialog):
             cwd="",
             folder="",
         )
-        # A Hermes on another machine keeps its conversations there, and this
-        # window cannot read them. Saying so is better than an empty page
-        # that looks like a conversation with nothing in it.
-        dlg = ConversationWebViewDialog(
-            self,
-            history_entry,
-            title,
-            missing="This conversation is not stored on this computer, so it cannot be shown here.",
-        )
-        try:
-            dlg.ShowModal()
-        finally:
-            dlg.Destroy()
-        self.list_box.SetFocus()
+        self.EndModal(wx.ID_OK)
 
 
 class SlashCommandDialog(wx.Dialog):
@@ -15415,6 +15457,12 @@ class MainFrame(wx.Frame):
         if self._app_mode != APP_MODE_AGENT:
             return False
         page = self.notebook.GetCurrentPage()
+        if isinstance(page, ConversationWebViewPanel):
+            if self._focus_is_within(focus, self.tab_switcher) and not shift:
+                return self._moved_focus(focus, lambda: page.focus_content(from_navigation=True))
+            if self._focus_is_within(focus, self.mode_combo) and shift:
+                return self._moved_focus(focus, lambda: page.focus_content(from_navigation=True))
+            return False
         if not isinstance(page, SessionPanel):
             return False
 
@@ -15563,6 +15611,8 @@ class MainFrame(wx.Frame):
         page = self.notebook.GetCurrentPage()
         if isinstance(page, SessionPanel):
             page.focus_prompt()
+        elif isinstance(page, ConversationWebViewPanel):
+            page.focus_content()
 
     def _refresh_chat_models(self) -> None:
         if self._app_mode == APP_MODE_CHAT and self.chat_panel is not None:
@@ -15976,6 +16026,64 @@ class MainFrame(wx.Frame):
         """Open a /btw side chat as a new tab in the same directory."""
         self._add_session(cwd, initial_prompt=message)
         wx.CallAfter(announce, f"Side chat opened in {_short_label(cwd)}")
+
+    def _add_conversation_webview(
+        self,
+        entry: HistoryEntry,
+        *,
+        missing: str = "No messages found in this conversation.",
+    ) -> ConversationWebViewPanel:
+        """Open a reading tab after the history picker has been destroyed."""
+        opener = self.notebook.GetCurrentPage()
+        panel = ConversationWebViewPanel(
+            self.notebook,
+            entry,
+            entry.title or "Conversation",
+            missing=missing,
+            on_close=self._close_conversation_webview,
+            on_command=lambda command: self._webview_command(panel, command),
+        )
+        panel.return_to = opener
+        self.notebook.AddPage(panel, f"Read: {entry.title or 'Conversation'}", select=True)
+        self._sync_tab_switcher()
+        wx.CallAfter(panel.focus_content, from_navigation=True)
+        return panel
+
+    def _webview_command(self, page: ConversationWebViewPanel, command: str) -> None:
+        if page._closed or self.notebook.GetCurrentPage() is not page:
+            return
+        if command == "close":
+            page._close()
+        elif command in ("next-tab", "previous-tab"):
+            self._cycle_tab(1 if command == "next-tab" else -1)
+        elif command in ("next-pane", "previous-pane"):
+            self._cycle_pane(1 if command == "next-pane" else -1)
+        elif command == "focus-content":
+            page.focus_content()
+        elif command.startswith("tab-") and command[4:] in "123456789" and len(command) == 5:
+            self._jump_to_tab(int(command[4:]) - 1)
+
+    def _close_conversation_webview(self, page: ConversationWebViewPanel) -> None:
+        """Remove the requested reader, returning to its opener when possible."""
+        index = next(
+            (i for i in range(self.notebook.GetPageCount()) if self.notebook.GetPage(i) is page),
+            wx.NOT_FOUND,
+        )
+        if index == wx.NOT_FOUND or page._closed:
+            return
+        selected = self.notebook.GetCurrentPage() is page
+        opener = getattr(page, "return_to", None)
+        page.mark_closed()
+        self.notebook.DeletePage(index)
+        if not self.notebook.GetPageCount():
+            self._add_session(self._history_cwd(), open_main_chat=False)
+        elif selected:
+            for i in range(self.notebook.GetPageCount()):
+                if self.notebook.GetPage(i) is opener:
+                    self._select_session(i)
+                    break
+            _call_after_alive(self.focus_for_mode)
+        self._follow_tab_backend()
 
     def _sync_tab_switcher(self) -> None:
         """Mirror the Simplebook's pages onto the visible tab strip.
@@ -17057,8 +17165,12 @@ class MainFrame(wx.Frame):
             if dlg.ShowModal() != wx.ID_OK:
                 return
             entry = dlg.entry
+            webview_entry = dlg.webview_entry
         finally:
             dlg.Destroy()
+        if webview_entry is not None:
+            self._add_conversation_webview(webview_entry)
+            return
         if entry is None:
             return
         self._resume_history(entry)
@@ -17077,8 +17189,15 @@ class MainFrame(wx.Frame):
                 return
             entry = dlg.entry
             attaching = dlg.attaching
+            webview_entry = dlg.webview_entry
         finally:
             dlg.Destroy()
+        if webview_entry is not None:
+            self._add_conversation_webview(
+                webview_entry,
+                missing="This conversation is not stored on this computer, so it cannot be shown here.",
+            )
+            return
         if not entry:
             return
         session_id = str(entry.get("id") or "")
@@ -17451,13 +17570,16 @@ class MainFrame(wx.Frame):
         return path
 
     def _close_current_session(self) -> None:
-        if self.notebook.GetPageCount() <= 1:
-            self._set_status_text("Cannot close the last session")
-            return
         sel = self.notebook.GetSelection()
         if sel == wx.NOT_FOUND:
             return
         page = self.notebook.GetPage(sel)
+        if isinstance(page, ConversationWebViewPanel):
+            self._close_conversation_webview(page)
+            return
+        if self.notebook.GetPageCount() <= 1:
+            self._set_status_text("Cannot close the last session")
+            return
         if isinstance(page, SessionPanel):
             # Not waited on: this is a menu handler, and the panel is about to
             # be destroyed, so there is nothing its worker can still tell us.
@@ -17471,6 +17593,14 @@ class MainFrame(wx.Frame):
         self._sync_tab_switcher()
         sel = self.notebook.GetSelection()
         page = self.notebook.GetCurrentPage()
+        if isinstance(page, ConversationWebViewPanel):
+            self._set_status_text(page.last_status)
+            if not self._strip_keeps_focus and not self._focus_is_within(
+                wx.Window.FindFocus(), self.tab_switcher
+            ):
+                wx.CallAfter(page._announce_selected, sel, self.notebook.GetPageCount())
+                wx.CallAfter(page.focus_content)
+            return
         if not isinstance(page, SessionPanel) or sel == wx.NOT_FOUND:
             return
         self._set_status_text(page.last_status)
@@ -17527,6 +17657,9 @@ class MainFrame(wx.Frame):
                 self.chat_panel.message_input.SetFocus()
             return
         page = self.notebook.GetCurrentPage()
+        if isinstance(page, ConversationWebViewPanel):
+            page.focus_content(from_navigation=True)
+            return
         if not isinstance(page, SessionPanel):
             return
         if which == "prompt":
@@ -17549,6 +17682,12 @@ class MainFrame(wx.Frame):
         reader's own command.
         """
         page = self.notebook.GetCurrentPage()
+        if self._app_mode == APP_MODE_AGENT and isinstance(page, ConversationWebViewPanel):
+            if self._focus_is_within(wx.Window.FindFocus(), self.tab_switcher):
+                page.focus_content(from_navigation=True)
+            else:
+                self.tab_switcher.SetFocus()
+            return
         if self._app_mode != APP_MODE_AGENT or not isinstance(page, SessionPanel):
             announce(self.statusbar.GetStatusText() or "Status bar is empty")
             return
@@ -17716,6 +17855,12 @@ class MainFrame(wx.Frame):
             self._links_timer.Start(1000)
 
     def _on_close(self, event: wx.CloseEvent) -> None:
+        notebook = getattr(self, "notebook", None)
+        if notebook is not None:
+            for index in range(notebook.GetPageCount()):
+                page = notebook.GetPage(index)
+                if isinstance(page, ConversationWebViewPanel):
+                    page.mark_closed()
         timer = getattr(self, "_links_timer", None)
         if timer is not None:
             timer.Stop()

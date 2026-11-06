@@ -1,7 +1,8 @@
 """Run with ``python -m tools.history_status_demo`` for a screen-reader check.
 
 The first scan shows a damaged Codex database and a working JSONL fallback.
-Ctrl+Enter reads the example conversation. Reload repairs the example databases.
+Ctrl+Enter reads the example conversation in a tab. Reopening the picker repairs
+the example databases on its second scan.
 All history and settings used here are temporary; no backend CLI is started.
 """
 
@@ -72,16 +73,18 @@ def main() -> None:
             patch.object(history, "_home", lambda: root),
             patch.object(history, "_LISTERS", {"codex": history._codex_entries}),
             patch.object(app, "list_history", scan),
-            patch.object(app, "_load_config", dict),
+            patch.object(app, "_load_config", lambda: {"backend": "codex", "app_mode": "agent"}),
             patch.object(app, "_save_config", lambda _config: True),
         ):
-            parent = wx.Frame(None, title="History source status demonstration")
-            dialog = app.HistoryDialog(parent, "codex", str(root))
+            parent = app.MainFrame(str(root))
+            parent.SetTitle("History source status demonstration")
             try:
-                dialog.ShowModal()
+                parent.Show()
+                wx.CallAfter(parent._open_history)
+                application.MainLoop()
             finally:
-                dialog.Destroy()
-                parent.Destroy()
+                if parent:
+                    parent.Destroy()
                 application.Yield()
 
 

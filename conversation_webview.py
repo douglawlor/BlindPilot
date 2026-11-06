@@ -16,11 +16,62 @@ import html
 import logging
 import platform
 import re
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import wx
 
 _TAGS = re.compile(r"<[^>]+>")
+_webview_loader: Any = None
+
+# Native browser children may keep application shortcuts from wx's accelerator
+# table. Forward only the tab/pane commands; ordinary document keys stay here.
+_TAB_KEYS_JS = """
+document.addEventListener('keydown', function(e) {
+    var command = null;
+    var modified = e.ctrlKey || e.metaKey;
+    if (modified && !e.altKey && e.key === 'Tab') {
+        command = e.shiftKey ? 'previous-tab' : 'next-tab';
+    } else if (modified && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'w') {
+        command = 'close';
+    } else if (!modified && !e.altKey && e.key === 'F6') {
+        command = e.shiftKey ? 'previous-pane' : 'next-pane';
+    } else if (modified && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        command = 'tab-' + e.key;
+    } else if (modified && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'l') {
+        command = 'focus-content';
+    } else if (modified && !e.altKey && e.shiftKey && (e.key === ']' || e.key === '[')) {
+        command = e.key === ']' ? 'next-tab' : 'previous-tab';
+    }
+    if (command && window.conversation && window.conversation.postMessage) {
+        e.preventDefault();
+        window.conversation.postMessage(JSON.stringify({type:'tab-command', command:command}));
+    }
+});
+"""
+
+
+def _load_webview2_loader() -> None:
+    """Keep wxPython's bundled loader available to wxWidgets on Windows.
+
+    wxWidgets looks up the DLL by name. Python can import wx from its package
+    directory without adding that directory to the Windows DLL search path.
+    Load the known bundled DLL by absolute path, without changing PATH or
+    searching the working directory.
+    """
+    global _webview_loader
+    if _webview_loader is not None:
+        return
+    import ctypes
+
+    try:
+        _webview_loader = ctypes.WinDLL(
+            str(Path(wx.__file__).resolve().parent / "WebView2Loader.dll")
+        )
+    except OSError:
+        logging.getLogger("blindpilot").info(
+            "could not load wxPython's WebView2 loader", exc_info=True
+        )
 
 
 def _text_of(markup: str) -> str:
@@ -46,6 +97,8 @@ def _modern_browser_available() -> bool:
     edge = html2.WebViewBackendEdge
     backend = edge.decode() if isinstance(edge, bytes) else edge
     try:
+        if not html2.WebView.IsBackendAvailable(backend):
+            _load_webview2_loader()
         return bool(html2.WebView.IsBackendAvailable(backend))
     except Exception:  # noqa: BLE001 - a backend that cannot be asked
         return False
@@ -59,11 +112,25 @@ class ConversationWebView:
     read-only box rather than not being shown at all.
     """
 
-    def __init__(self, parent, *, title: str, on_close: Callable[[], None]):
+    def __init__(
+        self,
+        parent,
+        *,
+        title: str,
+        on_close: Callable[[], None],
+        can_focus: Optional[Callable[[], bool]] = None,
+        on_command: Optional[Callable[[str], None]] = None,
+    ):
         self._on_close = on_close
+        self._closed = False
+        self._can_focus = can_focus or (lambda: True)
+        self._on_command = on_command
+        self._loaded = False
+        self._focus_requested = False
         self._view: Any = None
         self.view: Any = None
         self.fallback: Optional[wx.TextCtrl] = None
+        self._initial_document_pending = True
 
         if not _modern_browser_available():
             self.fallback = self._text_box(parent)
@@ -80,7 +147,17 @@ class ConversationWebView:
 
         import wx.html2 as html2
 
-        self._view = AccessibleWebView(
+        owner = self
+
+        class ConversationBrowser(AccessibleWebView):
+            def _run(self, script: str) -> None:
+                # The package's synchronous RunScript spins a nested event
+                # loop on Windows, allowing focus/load callbacks to reenter
+                # it and stall the GUI. Content and focus need no return value.
+                if not owner._closed and self.view is not None and self.view:
+                    self.view.RunScriptAsync(script)
+
+        self._view = ConversationBrowser(
             parent,
             title=title,
             lang="en",
@@ -97,6 +174,7 @@ class ConversationWebView:
             return
         self.view = self._view.view
         self.view.Bind(html2.EVT_WEBVIEW_NAVIGATING, self._on_navigating)
+        self.view.Bind(html2.EVT_WEBVIEW_LOADED, self._on_loaded)
 
     def _text_box(self, parent) -> wx.TextCtrl:
         """A read-only box the conversation can be read in as plain text."""
@@ -117,6 +195,8 @@ class ConversationWebView:
 
     def set_content(self, fragment: str) -> None:
         """Show the conversation, as a fragment of the document."""
+        if self._closed:
+            return
         if self.view is not None:
             self._view.set_content(fragment)
         elif self.fallback is not None:
@@ -124,19 +204,56 @@ class ConversationWebView:
 
     def focus(self) -> None:
         """Move the reading cursor into the conversation."""
+        if self._closed or not self._can_focus():
+            return
         if self.view is not None:
-            self._view.focus()
+            if self._loaded:
+                self._view.focus()
+            else:
+                # The package's own deferred focus is unconditional. Keep the
+                # request here so a later load cannot focus an inactive tab.
+                self._focus_requested = True
         elif self.fallback is not None:
             self.fallback.SetFocus()
 
+    def _on_loaded(self, event) -> None:
+        self._loaded = True
+        event.Skip()  # Let AccessibleWebView flush its queued content first.
+        wx.CallAfter(self._finish_load)
+
+    def _finish_load(self) -> None:
+        if self._closed or self.view is None or not self.view:
+            return
+        if self._on_command is not None:
+            self.view.RunScriptAsync(_TAB_KEYS_JS)
+        if self._focus_requested:
+            self._focus_requested = False
+            self.focus()
+
     def _close_from_page(self) -> None:
         """The page asked to close: Escape was pressed inside it."""
-        self._on_close()
+        if not self._closed:
+            self._on_close()
+
+    def invalidate(self) -> None:
+        """Stop queued browser work before the page or frame is destroyed."""
+        self._closed = True
+        self._focus_requested = False
+        self._on_command = None
 
     def _on_message(self, message: dict) -> None:
         """A message from the page. The page asks to close; nothing else."""
+        if self._closed:
+            return
         if isinstance(message, dict) and message.get("type") in ("__close", "close"):
             self._close_from_page()
+        elif (
+            isinstance(message, dict)
+            and message.get("type") == "tab-command"
+            and isinstance(message.get("command"), str)
+            and self._on_command is not None
+        ):
+            self._on_command(message["command"])
 
     def _on_navigating(self, event) -> None:
         """Nothing in a conversation may navigate the view away from it.
@@ -145,6 +262,13 @@ class ConversationWebView:
         is refused, because the conversation viewer has no back button.
         """
         url = event.GetURL() or ""
+        if self._initial_document_pending and url.startswith(
+            "data:text/html;charset=utf-8;base64,"
+        ):
+            # wxWidgets 3.3 loads SetPage's initial document as a data URL.
+            # Only that first document may navigate here; links in it cannot.
+            self._initial_document_pending = False
+            return
         if url in ("", "about:blank"):
             # Both the browser's own first page and the one set here.
             return

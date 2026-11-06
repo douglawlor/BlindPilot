@@ -23,6 +23,12 @@ import blindpilot_app as app
 from session_history import HistoryEntry, HistoryTurn
 
 
+def _reading_panel(parent, entry, title, **kwargs):
+    return app.ConversationWebViewPanel(
+        parent, entry, title, on_close=lambda page: page.Destroy(), **kwargs
+    )
+
+
 def _entry(title: str = "A conversation") -> HistoryEntry:
     return HistoryEntry(
         backend="claude",
@@ -86,9 +92,7 @@ def test_the_conversation_has_a_heading_for_its_title(frame):
     The reader navigates by heading, and a document that starts at level two
     gives them no way to tell where the conversation begins.
     """
-    dialog = app.ConversationWebViewDialog(
-        frame, _entry("Fix the login redirect"), "Fix the login redirect"
-    )
+    dialog = _reading_panel(frame, _entry("Fix the login redirect"), "Fix the login redirect")
     try:
         fragment = dialog._conversation_html(_turns())
     finally:
@@ -103,9 +107,7 @@ def test_the_conversation_has_a_heading_for_its_title(frame):
 
 def test_the_title_in_the_document_is_escaped(frame):
     """A title is text, never markup."""
-    dialog = app.ConversationWebViewDialog(
-        frame, _entry("<script>x</script>"), "<script>x</script>"
-    )
+    dialog = _reading_panel(frame, _entry("<script>x</script>"), "<script>x</script>")
     try:
         fragment = dialog._conversation_html(_turns())
     finally:
@@ -121,7 +123,7 @@ def test_nothing_a_conversation_names_is_fetched(frame):
     The picture becomes a link instead, and a link is only fetched when the
     user asks for it: the web view opens it in the browser.
     """
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation")
+    dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         fragment = dialog._conversation_html(
             [HistoryTurn(prompt="![a picture](https://example.com/p.png)", response="")]
@@ -136,7 +138,7 @@ def test_nothing_a_conversation_names_is_fetched(frame):
 
 def test_the_plain_text_form_keeps_the_turns_apart(frame):
     """Where there is no web view, the conversation still reads as a conversation."""
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation")
+    dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         text = dialog._conversation_text(_turns())
     finally:
@@ -149,21 +151,20 @@ def test_the_plain_text_form_keeps_the_turns_apart(frame):
 # ----- the dialog itself -----
 
 
-def test_the_dialog_opens_at_a_size_a_conversation_fits_in(frame):
-    """A conversation needs room; the web view's own best size is tiny."""
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation")
+def test_the_reader_is_a_child_panel_instead_of_a_top_level_dialog(frame):
+    """The notebook owns the reading area and controls its size."""
+    dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
-        width, height = dialog.GetClientSize()
+        assert isinstance(dialog, app.wx.Panel)
+        assert not dialog.IsTopLevel()
+        assert dialog.GetParent() is frame
     finally:
         dialog.Destroy()
-
-    assert width >= 700, f"the dialog is {width} pixels wide"
-    assert height >= 400, f"the dialog is {height} pixels high"
 
 
 def test_the_dialog_names_the_area_it_shows(frame):
     """The caption says which conversation; the control says what it is."""
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation")
+    dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         assert dialog._webview.control.GetName() == "Conversation"
     finally:
@@ -178,7 +179,7 @@ def test_escape_from_inside_the_conversation_closes_the_dialog(frame):
     """
     closed = []
 
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation")
+    dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         dialog._webview._on_close = lambda: closed.append(True)
         dialog._webview._on_message({"type": "__close"})
@@ -189,7 +190,7 @@ def test_escape_from_inside_the_conversation_closes_the_dialog(frame):
 
 def test_focus_moves_into_the_conversation(frame):
     """The reading cursor has to go where the conversation is."""
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation")
+    dialog = _reading_panel(frame, _entry(), "A conversation")
     focused: list[bool] = []
     from types import SimpleNamespace
 
@@ -210,7 +211,7 @@ def test_a_conversation_that_cannot_be_read_says_so(frame, monkeypatch):
     """A store that cannot be read is an error said out loud, not a blank page."""
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation")
+    dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         dialog._show_conversation([], "This conversation could not be read.")
     finally:
@@ -229,13 +230,14 @@ def test_a_conversation_closed_before_it_loads_says_nothing(frame, monkeypatch):
     """
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation")
+    dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         dialog.Destroy()
         dialog._load_conversation()
         assert said == []
     finally:
-        dialog.Destroy()
+        if dialog:
+            dialog.Destroy()
 
 
 def test_a_conversation_with_no_messages_says_which_one_is_missing(frame, monkeypatch):
@@ -243,7 +245,7 @@ def test_a_conversation_with_no_messages_says_which_one_is_missing(frame, monkey
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
     missing = "This conversation is not stored on this computer, so it cannot be shown here."
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation", missing=missing)
+    dialog = _reading_panel(frame, _entry(), "A conversation", missing=missing)
     try:
         dialog._show_conversation([], "")
     finally:
@@ -262,7 +264,7 @@ def test_without_a_browser_the_conversation_is_still_readable(frame, monkeypatch
     monkeypatch.setattr(html2.WebView, "New", unavailable)
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
-    dialog = app.ConversationWebViewDialog(frame, _entry(), "A conversation")
+    dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         assert not dialog._webview.using_webview
         dialog._show_conversation(_turns(), "")

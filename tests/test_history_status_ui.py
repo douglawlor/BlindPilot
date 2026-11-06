@@ -11,6 +11,12 @@ from doubles import KeyEvent
 from session_history import HistoryEntry, HistoryTurn
 
 
+def _reading_panel(parent, entry, title, **kwargs):
+    return app.ConversationWebViewPanel(
+        parent, entry, title, on_close=lambda page: page.Destroy(), **kwargs
+    )
+
+
 def _wait(predicate):
     deadline = time.monotonic() + 3
     while not predicate() and time.monotonic() < deadline:
@@ -83,11 +89,11 @@ def test_enter_in_source_status_does_not_open_a_conversation(monkeypatch):
 
 
 def test_partial_conversation_keeps_text_and_announces_warning(frame, monkeypatch):
-    monkeypatch.setattr(app.ConversationWebViewDialog, "_load_conversation", lambda _s: None)
+    monkeypatch.setattr(app.ConversationWebViewPanel, "_load_conversation", lambda _s: None)
     spoken = []
     monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
     entry = HistoryEntry("claude", "partial", "Partial conversation", "", 1)
-    dialog = app.ConversationWebViewDialog(frame, entry, entry.title)
+    dialog = _reading_panel(frame, entry, entry.title)
     displayed = []
     try:
         dialog._webview = None

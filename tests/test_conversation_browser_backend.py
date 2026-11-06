@@ -78,9 +78,67 @@ def test_the_reading_cursor_goes_into_the_conversation(monkeypatch):
     _fake_package(monkeypatch)
 
     view = viewer.ConversationWebView(None, title="A conversation", on_close=lambda: None)
+    view._loaded = True
     view.focus()
 
     assert view._view.focused
+
+
+def test_a_late_browser_load_does_not_focus_a_tab_switched_away_from(monkeypatch):
+    _fake_package(monkeypatch)
+    active = [True]
+    view = viewer.ConversationWebView(
+        None, title="Conversation", on_close=lambda: None, can_focus=lambda: active[0]
+    )
+    view.focus()
+    assert not view._view.focused
+    active[0] = False
+    view._loaded = True
+    view._finish_load()
+    assert not view._view.focused
+    active[0] = True
+    view.focus()
+    assert view._view.focused
+
+
+def test_browser_tab_commands_are_forwarded_to_the_owner(monkeypatch):
+    _fake_package(monkeypatch)
+    commands = []
+    view = viewer.ConversationWebView(
+        None, title="Conversation", on_close=lambda: None, on_command=commands.append
+    )
+    view._on_message({"type": "tab-command", "command": "next-tab"})
+    view._on_message({"type": "tab-command", "command": None})
+    assert commands == ["next-tab"]
+
+
+def test_package_scripts_run_without_a_nested_synchronous_event_loop(monkeypatch):
+    _fake_package(monkeypatch)
+    scripts = []
+    view = viewer.ConversationWebView(None, title="Conversation", on_close=lambda: None)
+    view._view.view.RunScriptAsync = scripts.append
+    view._view._run("window.__awv.focus();")
+    assert scripts == ["window.__awv.focus();"]
+
+
+def test_invalidated_browser_drops_queued_scripts_focus_and_commands(monkeypatch):
+    _fake_package(monkeypatch)
+    actions = []
+    view = viewer.ConversationWebView(
+        None,
+        title="Conversation",
+        on_close=lambda: actions.append("close"),
+        on_command=actions.append,
+    )
+    view._view.view.RunScriptAsync = actions.append
+    view.focus()
+    view.invalidate()
+    view._finish_load()
+    view._view._run("late script")
+    view._on_message({"type": "tab-command", "command": "next-tab"})
+    view._close_from_page()
+    assert actions == []
+    assert not view._focus_requested
 
 
 def test_windows_without_webview2_uses_text_and_never_opens_ie(frame, monkeypatch):
@@ -89,6 +147,7 @@ def test_windows_without_webview2_uses_text_and_never_opens_ie(frame, monkeypatc
 
     monkeypatch.setattr(viewer.platform, "system", lambda: "Windows")
     monkeypatch.setattr(html2.WebView, "IsBackendAvailable", lambda backend: False)
+    monkeypatch.setattr(viewer, "_load_webview2_loader", lambda: None)
 
     def unexpected_browser(*_args, **_kwargs):
         raise AssertionError("an unavailable Edge backend must not fall back to IE")
@@ -110,6 +169,51 @@ def test_the_modern_browser_is_the_one_asked_for_on_windows(monkeypatch):
     )
 
     assert viewer._modern_browser_available() is True
+
+
+def test_windows_retries_edge_after_loading_the_bundled_loader(monkeypatch):
+    monkeypatch.setattr(viewer.platform, "system", lambda: "Windows")
+    loaded = []
+    monkeypatch.setattr(viewer, "_load_webview2_loader", lambda: loaded.append(True))
+    monkeypatch.setattr(html2.WebView, "IsBackendAvailable", lambda backend: bool(loaded))
+
+    assert viewer._modern_browser_available() is True
+    assert loaded == [True]
+
+
+def test_loader_uses_wx_package_path_and_keeps_the_dll_loaded(monkeypatch):
+    import ctypes
+    from pathlib import Path
+
+    loaded = []
+    handle = object()
+    monkeypatch.setattr(viewer, "_webview_loader", None)
+    monkeypatch.setattr(viewer.wx, "__file__", str(Path("wx-package") / "__init__.py"))
+
+    def load(path):
+        loaded.append(path)
+        return handle
+
+    monkeypatch.setattr(ctypes, "WinDLL", load, raising=False)
+    viewer._load_webview2_loader()
+    viewer._load_webview2_loader()
+
+    assert loaded == [str(Path("wx-package").resolve() / "WebView2Loader.dll")]
+    assert viewer._webview_loader is handle
+
+
+def test_a_missing_loader_keeps_the_text_fallback_available(monkeypatch):
+    import ctypes
+
+    monkeypatch.setattr(viewer, "_webview_loader", None)
+
+    def missing(path):
+        raise OSError("loader missing")
+
+    monkeypatch.setattr(ctypes, "WinDLL", missing, raising=False)
+    viewer._load_webview2_loader()
+
+    assert viewer._webview_loader is None
 
 
 def test_a_link_opens_in_the_browser_and_the_conversation_stays(monkeypatch):
@@ -162,3 +266,18 @@ def test_navigation_that_is_not_a_link_is_refused(monkeypatch):
 
     assert opened == []
     assert event.vetoed
+
+
+def test_the_initial_setpage_document_can_load_but_data_links_cannot(monkeypatch):
+    _fake_package(monkeypatch)
+    view = viewer.ConversationWebView(None, title="Conversation", on_close=lambda: None)
+    vetoed = []
+    event = SimpleNamespace(
+        GetURL=lambda: "data:text/html;charset=utf-8;base64,PGgxPkNvbnZlcnNhdGlvbjwvaDE+",
+        Veto=lambda: vetoed.append(True),
+    )
+
+    view._on_navigating(event)
+    assert vetoed == []
+    view._on_navigating(event)
+    assert vetoed == [True]

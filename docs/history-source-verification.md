@@ -42,13 +42,17 @@ it does not start a coding backend or change your conversations.
 3. Press Enter while reading the status. Confirm that it does not open a
    conversation. Repeat with Ctrl+Enter.
 4. Return to the conversation list and press Ctrl+Enter. Confirm that the example
-   prompt and "The fallback works" answer can be read, and that the database
-   warning is announced and available in "History source status."
-5. Press Escape to return to Recent Conversations. Tab to Reload and activate
-   it. The demonstration repairs its example databases on the second scan.
-   Confirm that the warning disappears and the example remains available.
+   opens in a "Read: Example conversation" tab. Confirm that the prompt and
+   "The fallback works" answer can be read, and that the database warning is
+   announced and available in "History source status."
+5. Use Ctrl+Tab and Ctrl+Shift+Tab to switch between the reading tab and the
+   session. F6 moves between the document and tab strip. Confirm that arrowing
+   the strip keeps focus there. Escape or Ctrl+W closes the reading tab and
+   returns to the originating session. Press Ctrl+Shift+H to reopen Recent
+   Conversations. The demonstration repairs its databases on the second scan;
+   confirm that the warning disappears and the example remains available.
 6. Reopen the example. Confirm that no source warning is announced. Press
-   Escape to close the conversation, then Escape to close the demonstration.
+   Escape to close the reading tab, then Alt+F4 to close the demonstration.
 
 Record the platform, screen reader and version, steps checked, and any
 unexpected speech or focus behavior before marking the accessibility work

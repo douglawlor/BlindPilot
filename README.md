@@ -145,9 +145,11 @@ Report a Bug asks what happened, what you expected, and how to make it happen. I
 
 ### Recent Conversations
 
-Ctrl+Shift+H lists your old conversations. It shows every folder by default, because a conversation is filed under the directory it ran in, and that directory is not always the one BlindPilot was started from; Show narrows the list to this folder, and that choice is remembered. Sort them newest first, oldest first, by title, or by folder. Type in Filter to narrow the list. Under the list, Last exchange (Alt+T) shows your last message in the selected conversation and the answer to it, so you can tell apart two that started the same way. Enter opens the selected conversation in a new tab, the way the Open button does, and so does a double-click. Ctrl+Enter (or Shift+Enter) reads it in an accessible web view instead, where the conversation title is the one heading and each exchange is a heading under it, so it can be navigated by heading instead of read as one long line.
+Ctrl+Shift+H lists your old conversations. It shows every folder by default, because a conversation is filed under the directory it ran in, and that directory is not always the one BlindPilot was started from; Show narrows the list to this folder, and that choice is remembered. Sort them newest first, oldest first, by title, or by folder. Type in Filter to narrow the list. Under the list, Last exchange (Alt+T) shows your last message in the selected conversation and the answer to it, so you can tell apart two that started the same way. Enter opens the selected conversation in a new tab, the way the Open button does, and so does a double-click. Ctrl+Enter (or Shift+Enter) reads it in an accessible web view in a new reading tab, where the conversation title is the one heading and each exchange is a heading under it, so it can be navigated by heading instead of read as one long line.
 
 F2 renames a conversation. Leave the name blank to go back to the original. Delete hides one, and Show hidden conversations brings it back. Groups (Alt+G, or Ctrl+G in the list) puts the selected conversation in one or more groups, or a new one; Group (Alt+U) shows only one group's conversations, and each conversation's line says its groups. A group with nothing left in it disappears. Names, hidden conversations and groups are BlindPilot's own; the agents' files aren't touched.
+
+Reading tabs are named "Read: conversation title." Ctrl+Tab and Ctrl+Shift+Tab switch between reading and session tabs. F6 moves between the document and the tab strip. Ctrl+W or Escape closes the reading tab and returns to the session it was opened from when that session is still open.
 
 The Hermes conversation list (Ctrl+G) holds every conversation the Hermes knows, including the ones on another machine. Opening one of those in the web view says so rather than showing an empty page: a conversation stored on another computer cannot be read from this one.
 
@@ -212,7 +214,7 @@ Help, Keyboard Shortcuts (F1) shows all of this inside the app.
 - Ctrl+L: go to the prompt. Ctrl+T: new session. Ctrl+W: close it.
 - F6 and Shift+F6: move between the tabs, the answers, and the prompt.
 - Ctrl+Tab and Ctrl+Shift+Tab, or Ctrl+Shift+] and Ctrl+Shift+[: next and previous tab. Ctrl+1 to Ctrl+9: jump to a tab.
-- Ctrl+Shift+H: reopen an old conversation. Ctrl+G: Hermes conversations, including ones still running. Enter (in conversation list): open in a new tab, the way the Open button does. Ctrl+Enter or Shift+Enter (in conversation list): read it in an accessible web view.
+- Ctrl+Shift+H: reopen an old conversation. Ctrl+G: Hermes conversations, including ones still running. Enter (in conversation list): open in a new tab, the way the Open button does. Ctrl+Enter or Shift+Enter (in conversation list): read it in an accessible web view in a new reading tab.
 - Ctrl+Shift+K: shrink this conversation. Ctrl+Shift+N: start a fresh one.
 - Ctrl+F: search the answers. F3 and Shift+F3: next and previous match. Ctrl+R: jump to the latest answer.
 - Ctrl+Shift+B: browse all code blocks. Ctrl+Shift+L: browse links. Both work in Agent and Chat mode, under Conversation, Find and Browse. Filter searches full item text; Read Item reads it, and Copy preserves the code or address. Open Link opens a selected web link only when requested. In the Agent answers, the row's actions menu can limit either list to that response.
@@ -228,7 +230,7 @@ Help, Keyboard Shortcuts (F1) shows all of this inside the app.
 - Ctrl+.: stop the running task.
 - Enter: send. Shift+Enter: new line. Ctrl+Shift+Enter: save as a prompt, then send. Ctrl+Up or Alt+Up: into the newest answer.
 - In the answers: Enter reads a row in full. Shift+Enter opens the whole answer as a web page, so you can jump by heading, list, table and link; Escape comes back. C copies a row, Shift+C the whole answer, and Ctrl+Shift+C its last code block. Tab goes back to the prompt.
-- In conversation lists (Recent Conversations, Hermes Conversations): Enter opens the selected conversation in a new tab, the way the Open button does, and so does a double-click. Ctrl+Enter or Shift+Enter reads it in an accessible web view.
+- In conversation lists (Recent Conversations, Hermes Conversations): Enter opens the selected conversation in a new tab, the way the Open button does, and so does a double-click. Ctrl+Enter or Shift+Enter reads it in an accessible web view in a new reading tab.
 - While helper agents are running, a Subagents running list appears above the answers. Enter on one follows what it's doing, live.
 
 On a Mac, Ctrl is Cmd. Two keys are different so macOS doesn't eat them: Recent Conversations is Cmd+Shift+H (Cmd+H hides the app), and Model and Effort is Cmd+Shift+E (Cmd+M minimizes). Use Cmd+Shift+] and Cmd+Shift+[ to change tabs, since Cmd+Tab belongs to macOS.
