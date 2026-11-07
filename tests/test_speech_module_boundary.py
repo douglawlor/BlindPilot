@@ -46,6 +46,10 @@ def test_the_reader_state_is_read_through_the_module(monkeypatch):
     # their own line and never look at the connection.
     monkeypatch.setattr(blindpilot_app.platform, "system", lambda: "Windows")
 
+    # Initialized, as it is once any announcement has been attempted: without
+    # this the route is "pending" and the test passes only when an earlier
+    # test happened to initialize the speaker first.
+    monkeypatch.setattr(screen_speech, "_SPEAKER_INITIALIZED", True)
     monkeypatch.setattr(screen_speech, "_SPEAKER", object())
     assert blindpilot_app._speech_route() != "none found"
 
