@@ -23,7 +23,9 @@ def test_blindpilot_app_reexports_the_same_objects():
 def test_spoken_text_formats_as_before():
     assert spoken_text._spoken_duration(125) == "2 minutes 5 seconds"
     assert spoken_text._spoken_duration(0) == "0 seconds"
-    assert spoken_text._context_line(124_000, 200_000) == "Context 62% full: 124,000 of 200,000 tokens"
+    assert (
+        spoken_text._context_line(124_000, 200_000) == "Context 62% full: 124,000 of 200,000 tokens"
+    )
     assert spoken_text._context_line(0, 0) == "Context: not reported yet"
     assert spoken_text._result_label("first line\nsecond") == "Result: first line"
     assert spoken_text._sent_readback("fix the build") == "Sent: fix the build"

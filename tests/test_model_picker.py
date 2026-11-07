@@ -20,6 +20,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import blindpilot_app  # noqa: E402
+import claude_worker  # noqa: E402
 import claude_session  # noqa: E402
 import cli_install  # noqa: E402
 from blindpilot_app import (  # noqa: E402
@@ -137,11 +138,13 @@ def _probe_with(
 
     real_find, real_run = blindpilot_app._find_claude, blindpilot_app._run_claude
     blindpilot_app._find_claude = lambda: "claude"  # type: ignore[assignment]
+    claude_worker._find_claude = lambda: "claude"  # type: ignore[assignment]
     blindpilot_app._run_claude = fake_run  # type: ignore[assignment]
     try:
         return probe_model_options(os.getcwd() if cwd is None else cwd, max_age)
     finally:
         blindpilot_app._find_claude = real_find  # type: ignore[assignment]
+        claude_worker._find_claude = real_find  # type: ignore[assignment]
         blindpilot_app._run_claude = real_run  # type: ignore[assignment]
 
 
@@ -178,10 +181,12 @@ def test_probe_falls_back_and_says_so_when_the_cli_output_changes():
 def test_probe_falls_back_when_claude_is_not_installed():
     real_find = blindpilot_app._find_claude
     blindpilot_app._find_claude = lambda: None  # type: ignore[assignment]
+    claude_worker._find_claude = lambda: None  # type: ignore[assignment]
     try:
         options = probe_model_options(None)
     finally:
         blindpilot_app._find_claude = real_find  # type: ignore[assignment]
+        claude_worker._find_claude = real_find  # type: ignore[assignment]
     assert options.models == blindpilot_app._FALLBACK_MODELS
     assert "not found" in options.error
 
@@ -235,10 +240,12 @@ def test_cached_lookup_never_shells_out():
     _RUNS.clear()
     real_find = blindpilot_app._find_claude
     blindpilot_app._find_claude = lambda: "claude"  # type: ignore[assignment]
+    claude_worker._find_claude = lambda: "claude"  # type: ignore[assignment]
     try:
         assert blindpilot_app.cached_model_options("/tmp/cold", 900) is None
     finally:
         blindpilot_app._find_claude = real_find  # type: ignore[assignment]
+        claude_worker._find_claude = real_find  # type: ignore[assignment]
     assert _RUNS == []
 
 
@@ -273,6 +280,7 @@ def _worker_command(**kwargs) -> list[str]:
     real_popen, real_find = claude_session._popen, blindpilot_app._find_claude
     claude_session._popen = fake_popen  # type: ignore[assignment]
     blindpilot_app._find_claude = lambda: "claude"  # type: ignore[assignment]
+    claude_worker._find_claude = lambda: "claude"  # type: ignore[assignment]
     try:
         blindpilot_app.ClaudeWorker(
             "hi",
@@ -290,6 +298,7 @@ def _worker_command(**kwargs) -> list[str]:
     finally:
         claude_session._popen = real_popen  # type: ignore[assignment]
         blindpilot_app._find_claude = real_find  # type: ignore[assignment]
+        claude_worker._find_claude = real_find  # type: ignore[assignment]
     return captured[0]
 
 
@@ -335,12 +344,14 @@ def test_cached_lookup_never_searches_for_the_cli():
 
     real_find, real_backend = blindpilot_app._find_claude, blindpilot_app.find_backend_cli
     blindpilot_app._find_claude = never  # type: ignore[assignment]
+    claude_worker._find_claude = never  # type: ignore[assignment]
     blindpilot_app.find_backend_cli = never  # type: ignore[assignment]
     try:
         assert blindpilot_app.cached_model_options("/tmp/cold", 900) is None
         assert blindpilot_app.cached_model_options("/tmp/cold", 900, backend="codex") is None
     finally:
         blindpilot_app._find_claude = real_find  # type: ignore[assignment]
+        claude_worker._find_claude = real_find  # type: ignore[assignment]
         blindpilot_app.find_backend_cli = real_backend  # type: ignore[assignment]
 
 
