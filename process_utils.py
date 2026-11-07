@@ -282,3 +282,15 @@ def hide_console_windows(roots: Optional[set[int]] = None) -> int:
             except Exception:
                 pass
     return hidden
+
+
+def _git(cwd: str, *args: str) -> "subprocess.CompletedProcess[str]":
+    return subprocess.run(
+        ["git", "-C", cwd, *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+        **no_window_kwargs(),
+    )

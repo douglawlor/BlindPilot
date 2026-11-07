@@ -19,6 +19,7 @@ import time
 import pytest
 
 import blindpilot_app as app
+import new_session_dialog
 from session_history import HistoryEntry, HistoryTurn
 
 
@@ -408,6 +409,7 @@ def test_a_reply_ending_in_done_ends_the_conversation(frame):
 def test_recent_folders_are_newest_first_without_duplicates(monkeypatch):
     stored: dict = {}
     monkeypatch.setattr(app, "_load_config", lambda: dict(stored))
+    monkeypatch.setattr(new_session_dialog, "_load_config", lambda: dict(stored))
     monkeypatch.setattr(app, "_save_config", lambda cfg: stored.update(cfg) or True)
 
     app._remember_folder("C:/one")

@@ -12,6 +12,7 @@ import pytest
 wx = pytest.importorskip("wx")
 
 import blindpilot_app as app  # noqa: E402
+import new_session_dialog  # noqa: E402
 
 
 @pytest.fixture
@@ -40,7 +41,9 @@ def queued(monkeypatch):
 
     monkeypatch.setattr(app.threading, "Thread", Thread)
     monkeypatch.setattr(
-        app, "_call_after_alive", lambda callback, *args: callbacks.append((callback, args))
+        new_session_dialog,
+        "_call_after_alive",
+        lambda callback, *args: callbacks.append((callback, args)),
     )
     return workers, callbacks
 
@@ -54,7 +57,7 @@ def test_list_and_clone_start_after_the_button_callback(frame, tmp_path, monkeyp
     workers, callbacks = queued
     commands = []
     spoken = []
-    monkeypatch.setattr(app, "announce", lambda message: spoken.append(message))
+    monkeypatch.setattr(new_session_dialog, "announce", lambda message: spoken.append(message))
 
     def run(_self, command, _timeout, _cancelled):
         commands.append(command)
@@ -104,7 +107,7 @@ def test_list_and_clone_start_after_the_button_callback(frame, tmp_path, monkeyp
 def test_cancel_discards_late_listing(frame, tmp_path, monkeypatch, queued):
     workers, callbacks = queued
     spoken = []
-    monkeypatch.setattr(app, "announce", lambda message: spoken.append(message))
+    monkeypatch.setattr(new_session_dialog, "announce", lambda message: spoken.append(message))
     monkeypatch.setattr(
         app.NewSessionDialog,
         "_run_github",
@@ -131,7 +134,7 @@ def test_cancel_discards_late_listing(frame, tmp_path, monkeypatch, queued):
 
 def test_destroyed_dialog_discards_a_late_result(frame, tmp_path, monkeypatch, queued):
     workers, callbacks = queued
-    monkeypatch.setattr(app, "announce", lambda _message: None)
+    monkeypatch.setattr(new_session_dialog, "announce", lambda _message: None)
     monkeypatch.setattr(
         app.NewSessionDialog,
         "_run_github",
@@ -149,7 +152,7 @@ def test_destroyed_dialog_discards_a_late_result(frame, tmp_path, monkeypatch, q
 
 def test_cancelled_clone_does_not_fill_the_folder(frame, tmp_path, monkeypatch, queued):
     workers, callbacks = queued
-    monkeypatch.setattr(app, "announce", lambda _message: None)
+    monkeypatch.setattr(new_session_dialog, "announce", lambda _message: None)
     monkeypatch.setattr(
         app.NewSessionDialog,
         "_run_github",
@@ -196,7 +199,7 @@ def test_cancelled_clone_does_not_fill_the_folder(frame, tmp_path, monkeypatch, 
 def test_listing_error_restores_available_controls(frame, tmp_path, monkeypatch, queued):
     workers, callbacks = queued
     errors = []
-    monkeypatch.setattr(app, "announce", lambda _message: None)
+    monkeypatch.setattr(new_session_dialog, "announce", lambda _message: None)
     monkeypatch.setattr(app.NewSessionDialog, "_run_github", lambda *_args: (None, "offline"))
     monkeypatch.setattr(
         app.NewSessionDialog, "_reject", lambda _self, message: errors.append(message)

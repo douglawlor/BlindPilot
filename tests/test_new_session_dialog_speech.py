@@ -29,7 +29,7 @@ import pytest
 
 wx = pytest.importorskip("wx")
 
-import blindpilot_app  # noqa: E402
+import new_session_dialog  # noqa: E402
 from blindpilot_app import NewSessionDialog  # noqa: E402
 
 REMOTE = "ws://garfield:9119/api/ws"
@@ -55,7 +55,7 @@ def spoken(monkeypatch) -> list[str]:
     """What the dialog said on the announcement stream, in order."""
     captured: list[str] = []
     monkeypatch.setattr(
-        blindpilot_app,
+        new_session_dialog,
         "announce",
         lambda text, urgent=False: captured.append(text),
     )

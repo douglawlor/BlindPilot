@@ -11,8 +11,8 @@ import pytest
 
 wx = pytest.importorskip("wx")
 
-import blindpilot_app  # noqa: E402
 from blindpilot_app import NewSessionDialog, SendToTabDialog  # noqa: E402
+import new_session_dialog  # noqa: E402
 
 
 @pytest.fixture
@@ -51,7 +51,9 @@ def test_the_newest_recent_folder_is_filled_in(frame, tmp_path, monkeypatch):
     older.mkdir()
     newer.mkdir()
     monkeypatch.setattr(
-        blindpilot_app, "_recent_folders", lambda: [str(newer), str(tmp_path / "gone"), str(older)]
+        new_session_dialog,
+        "_recent_folders",
+        lambda: [str(newer), str(tmp_path / "gone"), str(older)],
     )
 
     dlg = NewSessionDialog(frame, default_dir=str(tmp_path))
@@ -64,7 +66,7 @@ def test_the_newest_recent_folder_is_filled_in(frame, tmp_path, monkeypatch):
 
 
 def test_a_worktree_needs_a_branch_name(frame, tmp_path, monkeypatch, refusals):
-    monkeypatch.setattr(blindpilot_app, "_recent_folders", list)
+    monkeypatch.setattr(new_session_dialog, "_recent_folders", list)
     dlg = NewSessionDialog(frame, default_dir=str(tmp_path))
     try:
         dlg.folder_box.SetValue(str(tmp_path))
@@ -77,14 +79,14 @@ def test_a_worktree_needs_a_branch_name(frame, tmp_path, monkeypatch, refusals):
 
 
 def test_a_worktree_session_opens_in_the_new_worktree(frame, tmp_path, monkeypatch, refusals):
-    monkeypatch.setattr(blindpilot_app, "_recent_folders", list)
+    monkeypatch.setattr(new_session_dialog, "_recent_folders", list)
     made: list[tuple[str, str]] = []
 
     def fake_worktree(folder, branch):
         made.append((folder, branch))
         return str(tmp_path / "proj-fix"), ""
 
-    monkeypatch.setattr(blindpilot_app, "create_worktree", fake_worktree)
+    monkeypatch.setattr(new_session_dialog, "create_worktree", fake_worktree)
     dlg = NewSessionDialog(frame, default_dir=str(tmp_path))
     try:
         dlg.folder_box.SetValue(str(tmp_path))
