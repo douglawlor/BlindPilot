@@ -22,6 +22,7 @@ SPDX-License-Identifier: MIT
 
 from __future__ import annotations
 
+import bisect
 import html
 import re
 from dataclasses import dataclass
@@ -474,6 +475,71 @@ _SENTENCE_END_RE = re.compile(r"(?s)^.*(?:[.!?:;…][\"'”’)\]]*(?=\s|$)|\n)"
 _LIVE_SENTENCE_END_RE = re.compile(r"(?s)^.*(?:[.!?:;…][\"'”’)\]]*(?=\s)|\n)")
 # Characters that can end a sentence, for the streamer's cheap first look.
 _SENTENCE_MARKS = ".!?:;…\n\"'”’)]"
+
+
+def _one_line(label: str) -> str:
+    """Fold a row's label onto one logical line, so `_row_starts` stays in
+    step with the text even though rows now wrap to several visual lines.
+
+    Labels are already flattened; a stray newline would break that mapping.
+    """
+    return " ".join(label.split())
+
+
+def _row_at(starts: List[int], position: int) -> int:
+    """Which row a caret position is in, by each row's start offset."""
+    if not starts:
+        return -1
+    return max(0, bisect.bisect_right(starts, position) - 1)
+
+
+def _starts_of(lines: List[str]) -> List[int]:
+    """Each line's start offset once every line is joined with a newline."""
+    starts: List[int] = []
+    offset = 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line) + 1
+    return starts
+
+
+def _last_block_start(text: str) -> int:
+    """Offset of the last top-level block's first line in `text`.
+
+    That block is still growing, so it is held back: the answer is parsed from
+    here rather than from the start, and rows are only ever appended whole. The
+    depth counter walks past a table or a fenced block, so a blank line inside
+    one is not mistaken for the boundary.
+    """
+    if not text:
+        return 0
+    # Line starts as the parser counts them: split on newlines, which are kept.
+    line_starts = [0]
+    for i, character in enumerate(text):
+        if character == "\n":
+            line_starts.append(i + 1)
+    depth, start = 0, 0
+    for token in _MD.parse(text):
+        if depth == 0 and token.nesting >= 0 and token.map and token.map[0] < len(line_starts):
+            start = line_starts[token.map[0]]
+        depth += token.nesting
+    return start
+
+
+def _search_key(row: Row) -> tuple[str, str]:
+    """The row's lowercased payload and label, lowered once per content.
+
+    Search lowers both strings of every row on every refresh, and a turn that
+    streams calls that refresh for each batch. The lowered pair is cached on
+    the row and kept only while it still holds the very strings the row holds,
+    so a payload rewritten later is lowered afresh.
+    """
+    cached = getattr(row, "_search_key", None)
+    if cached is not None and cached[2] is row.payload and cached[3] is row.label:
+        return cached[0], cached[1]
+    lowered = (row.payload.lower(), row.label.lower(), row.payload, row.label)
+    setattr(row, "_search_key", lowered)  # noqa: B010 -- Row has no such attribute declared
+    return lowered[0], lowered[1]
 
 
 def complete_sentences(text: str) -> str:
