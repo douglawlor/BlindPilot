@@ -13,6 +13,7 @@ import pytest
 
 import agent_backends
 import blindpilot_app
+import history_dialog  # noqa: E402
 from session_history import HistoryEntry, HistoryTurn
 
 
@@ -34,7 +35,7 @@ def test_the_box_follows_the_selection_and_ignores_a_late_answer(frame, monkeypa
     entries = [
         HistoryEntry("claude", f"s{n}", f"Conversation {n}", f"p{n}", 100.0 - n) for n in range(2)
     ]
-    monkeypatch.setattr(blindpilot_app, "list_history", lambda *_a, **_k: entries)
+    monkeypatch.setattr(history_dialog, "list_history", lambda *_a, **_k: entries)
     app = wx.GetApp()
     old = app.GetAssertMode()
     app.SetAssertMode(wx.APP_ASSERT_EXCEPTION)

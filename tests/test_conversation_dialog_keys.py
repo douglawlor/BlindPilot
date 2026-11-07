@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import history_dialog  # noqa: E402
 from doubles import Button, KeyEvent
 
 
@@ -64,7 +65,9 @@ def _hermes_stub(monkeypatch):
     stub = _stub(monkeypatch)
     stub.dialog = app.HermesSessionsDialog
     stub.said: list[str] = []
-    monkeypatch.setattr(app, "announce", lambda text, urgent=False: stub.said.append(text))
+    monkeypatch.setattr(
+        history_dialog, "announce", lambda text, urgent=False: stub.said.append(text)
+    )
     stub.reloads: list[dict] = []
     stub._reload = lambda **kwargs: stub.reloads.append(kwargs)
     return stub

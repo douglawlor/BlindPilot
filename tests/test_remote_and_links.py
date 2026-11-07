@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import history_dialog  # noqa: E402
 import remote_sessions as rs
 
 LISTING = """This session is Laptop [aaaa]
@@ -193,8 +194,8 @@ def test_recent_conversations_filters_and_names_groups(frame, monkeypatch):
     one = HistoryEntry("claude", "a", "Fix login", "", 2.0)
     two = HistoryEntry("claude", "b", "Write docs", "", 1.0)
     cfg = {"conversation_groups": {"claude:a": ["Work"]}}
-    monkeypatch.setattr(app, "list_history", lambda *_a, **_k: [])
-    monkeypatch.setattr(app, "_load_config", lambda: dict(cfg))
+    monkeypatch.setattr(history_dialog, "list_history", lambda *_a, **_k: [])
+    monkeypatch.setattr(history_dialog, "_load_config", lambda: dict(cfg))
     wx_app = wx.GetApp()
     old = wx_app.GetAssertMode()
     wx_app.SetAssertMode(wx.APP_ASSERT_EXCEPTION)

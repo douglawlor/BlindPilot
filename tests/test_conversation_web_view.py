@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import blindpilot_app as app
+import history_dialog  # noqa: E402
 from session_history import HistoryEntry, HistoryTurn
 
 
@@ -284,8 +285,8 @@ def test_the_list_shows_every_folder_by_default(frame, monkeypatch):
     otherwise. Scoping the list to one of them hid conversations the user
     knew they had.
     """
-    monkeypatch.setattr(app, "_load_config", dict)
-    monkeypatch.setattr(app, "list_history", lambda *_a, **_k: [])
+    monkeypatch.setattr(history_dialog, "_load_config", dict)
+    monkeypatch.setattr(history_dialog, "list_history", lambda *_a, **_k: [])
     dialog = app.HistoryDialog(frame, backend="claude", cwd=r"C:\somewhere")
     try:
         assert dialog.scope_picker.GetStringSelection() == app._HISTORY_SCOPE_LABELS[1]
@@ -302,9 +303,9 @@ def test_the_folder_the_user_asked_for_is_remembered(frame, monkeypatch):
         saved.update(cfg)
         return True
 
-    monkeypatch.setattr(app, "_load_config", lambda: {"history_scope": "folder"})
-    monkeypatch.setattr(app, "_save_or_announce", save)
-    monkeypatch.setattr(app, "list_history", lambda *_a, **_k: [])
+    monkeypatch.setattr(history_dialog, "_load_config", lambda: {"history_scope": "folder"})
+    monkeypatch.setattr(history_dialog, "_save_or_announce", save)
+    monkeypatch.setattr(history_dialog, "list_history", lambda *_a, **_k: [])
     dialog = app.HistoryDialog(frame, backend="claude", cwd=r"C:\somewhere")
     try:
         assert dialog.scope_picker.GetStringSelection() == app._HISTORY_SCOPE_LABELS[0]
@@ -319,8 +320,8 @@ def test_the_folder_the_user_asked_for_is_remembered(frame, monkeypatch):
 
 def test_the_list_says_what_enter_does(frame, monkeypatch):
     """Enter changed what it does in this list, so the list says so."""
-    monkeypatch.setattr(app, "_load_config", dict)
-    monkeypatch.setattr(app, "list_history", lambda *_a, **_k: [])
+    monkeypatch.setattr(history_dialog, "_load_config", dict)
+    monkeypatch.setattr(history_dialog, "list_history", lambda *_a, **_k: [])
     dialog = app.HistoryDialog(frame, backend="claude", cwd=r"C:\somewhere")
     try:
         dialog._entries = [_entry()]

@@ -28,6 +28,7 @@ import logging
 import pytest
 
 import blindpilot_app as app
+import history_dialog
 import remote_hermes_dialog
 import app_config
 
@@ -238,9 +239,11 @@ def test_renaming_a_conversation_that_cannot_be_saved_says_so(unwritable, monkey
     rename never reached, and the success sentence would claim a name the
     file does not hold."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(history_dialog, "_load_config", dict)
     monkeypatch.setattr(app.wx, "TextEntryDialog", lambda *a, **k: _Entry("Renamed"))
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
     dialog = _history_dialog()
 
     app.HistoryDialog._rename(dialog)
@@ -255,9 +258,11 @@ def test_renaming_a_conversation_that_saves_announces_the_new_name(
 ):
     config_at(tmp_path / "config.json")
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(history_dialog, "_load_config", dict)
     monkeypatch.setattr(app.wx, "TextEntryDialog", lambda *a, **k: _Entry("Renamed"))
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
     dialog = _history_dialog()
 
     app.HistoryDialog._rename(dialog)
@@ -270,8 +275,10 @@ def test_hiding_a_conversation_that_cannot_be_saved_says_so(unwritable, monkeypa
     """The hidden set the list reads goes back the way it was, so the
     conversation is not hidden by a save that never happened."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(history_dialog, "_load_config", dict)
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
     dialog = _history_dialog()
 
     app.HistoryDialog._toggle_hidden(dialog)
@@ -327,6 +334,7 @@ def test_applying_preferences_that_cannot_be_saved_says_so(
 def test_the_helper_announces_a_write_the_file_refused(unwritable, monkeypatch):
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
 
     assert app._save_or_announce({"setup_complete": True}) is False
     assert said == ["Error: could not save settings"]
@@ -336,6 +344,7 @@ def test_the_helper_stays_quiet_when_the_write_lands(config_at, tmp_path, monkey
     config_at(tmp_path / "config.json")
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
 
     assert app._save_or_announce({"backend": "codex"}) is True
     assert said == []
@@ -347,8 +356,10 @@ def test_changing_the_sort_that_cannot_be_saved_says_so(unwritable, monkeypatch)
     refuses it, and the conversation count that follows must not be the
     only thing the user hears."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(history_dialog, "_load_config", dict)
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
     refreshed: list[bool] = []
 
     class _Stub:
@@ -433,9 +444,15 @@ def test_changing_the_mode_says_what_it_does_then_the_refusal(unwritable, monkey
     refusal is that it will not survive a restart. The refusal goes last so
     it is not followed by anything that sounds like success."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(history_dialog, "_load_config", dict)
     events: list[tuple[str, str]] = []
     monkeypatch.setattr(
         app,
+        "announce",
+        lambda text, urgent=False: events.append(("said", text)),
+    )
+    monkeypatch.setattr(
+        history_dialog,
         "announce",
         lambda text, urgent=False: events.append(("said", text)),
     )

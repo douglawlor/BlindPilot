@@ -6,6 +6,7 @@ import time
 import wx
 
 import blindpilot_app as app
+import history_dialog  # noqa: E402
 from session_history import HistoryEntry
 
 
@@ -35,9 +36,9 @@ def test_slow_history_opens_immediately_and_ignores_the_previous_scope(frame, mo
     # This folder, so the first scan is the slow one. The list shows every
     # folder by default now, and the point of this test is what happens while
     # a slow scan is still running.
-    monkeypatch.setattr(app, "_load_config", lambda: {"history_scope": "folder"})
-    monkeypatch.setattr(app, "list_history", scan)
-    monkeypatch.setattr(app, "announce", lambda *_a, **_k: None)
+    monkeypatch.setattr(history_dialog, "_load_config", lambda: {"history_scope": "folder"})
+    monkeypatch.setattr(history_dialog, "list_history", scan)
+    monkeypatch.setattr(history_dialog, "announce", lambda *_a, **_k: None)
     dialog = app.HistoryDialog(frame, "claude", ".")
     delivered = []
     loaded = dialog._history_loaded
@@ -73,8 +74,8 @@ def test_history_loading_failure_is_spoken_and_leaves_no_openable_row(frame, mon
         raise OSError("History unavailable")
 
     spoken = []
-    monkeypatch.setattr(app, "list_history", scan)
-    monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(history_dialog, "list_history", scan)
+    monkeypatch.setattr(history_dialog, "announce", lambda text, **_k: spoken.append(text))
     dialog = app.HistoryDialog(frame, "claude", ".")
     try:
         _wait(lambda: any("Could not load conversations" in text for text in spoken))
@@ -96,8 +97,8 @@ def test_closing_during_loading_discards_the_result(frame, monkeypatch):
         return [HistoryEntry("claude", "late", "Late result", "", 1)]
 
     spoken = []
-    monkeypatch.setattr(app, "list_history", scan)
-    monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(history_dialog, "list_history", scan)
+    monkeypatch.setattr(history_dialog, "announce", lambda text, **_k: spoken.append(text))
     dialog = app.HistoryDialog(frame, "claude", ".")
     delivered = threading.Event()
     loaded = dialog._history_loaded
@@ -122,9 +123,9 @@ def test_a_queued_result_is_ignored_while_native_destruction_is_deferred(frame, 
         release.wait(3)
         return []
 
-    monkeypatch.setattr(app, "list_history", scan)
+    monkeypatch.setattr(history_dialog, "list_history", scan)
     spoken = []
-    monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(history_dialog, "announce", lambda text, **_k: spoken.append(text))
     dialog = app.HistoryDialog(frame, "claude", ".")
     serial = dialog._load_serial
     try:

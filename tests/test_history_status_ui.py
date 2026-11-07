@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import wx
 
 import blindpilot_app as app
+import history_dialog  # noqa: E402
 from doubles import KeyEvent
 from session_history import HistoryEntry, HistoryTurn
 
@@ -33,10 +34,10 @@ def test_partial_history_is_openable_and_status_survives_filtering(frame, monkey
         yield [SimpleNamespace(message=warning)]
 
     entry = HistoryEntry("claude", "healthy", "Healthy conversation", "", 1)
-    monkeypatch.setattr(app, "history_diagnostics", diagnostics)
-    monkeypatch.setattr(app, "list_history", lambda *_a: [entry])
+    monkeypatch.setattr(history_dialog, "history_diagnostics", diagnostics)
+    monkeypatch.setattr(history_dialog, "list_history", lambda *_a: [entry])
     spoken = []
-    monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(history_dialog, "announce", lambda text, **_k: spoken.append(text))
     dialog = app.HistoryDialog(frame, "claude", ".")
     try:
         _wait(lambda: not dialog._loading)
@@ -61,8 +62,8 @@ def test_partial_history_is_openable_and_status_survives_filtering(frame, monkey
 
 
 def test_empty_readable_history_has_no_failure_status(frame, monkeypatch):
-    monkeypatch.setattr(app, "list_history", lambda *_a: [])
-    monkeypatch.setattr(app, "announce", lambda *_a, **_k: None)
+    monkeypatch.setattr(history_dialog, "list_history", lambda *_a: [])
+    monkeypatch.setattr(history_dialog, "announce", lambda *_a, **_k: None)
     dialog = app.HistoryDialog(frame, "claude", ".")
     try:
         _wait(lambda: not dialog._loading)

@@ -11,12 +11,13 @@ one. This one does, with wx assertions raised as errors.
 from __future__ import annotations
 
 import blindpilot_app
+import history_dialog  # noqa: E402
 
 
 def test_recent_conversations_builds_with_assertions_on(frame, monkeypatch):
     import wx
 
-    monkeypatch.setattr(blindpilot_app, "list_history", lambda *_a, **_k: [])
+    monkeypatch.setattr(history_dialog, "list_history", lambda *_a, **_k: [])
     app = wx.GetApp()
     old = app.GetAssertMode()
     app.SetAssertMode(wx.APP_ASSERT_EXCEPTION)

@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import blindpilot_app  # noqa: E402
+import history_dialog  # noqa: E402
 from blindpilot_app import (  # noqa: E402
     DEFAULT_PERMISSION_MODE,
     _default_permission_mode,
@@ -47,14 +48,17 @@ class _Sandbox:
         self._writes = []
         self._old_load = blindpilot_app._load_config
         self._old_save = blindpilot_app._save_config
+        self._old_history_save = history_dialog._save_config
         cfg = {"permission_mode": self._saved} if self._saved else {}
         blindpilot_app._load_config = lambda: dict(cfg)
         blindpilot_app._save_config = lambda c: self._writes.append(dict(c)) or True
+        history_dialog._save_config = blindpilot_app._save_config
         return self
 
     def __exit__(self, *exc):
         blindpilot_app._load_config = self._old_load
         blindpilot_app._save_config = self._old_save
+        history_dialog._save_config = self._old_history_save
         self._tmp.cleanup()
         return False
 
