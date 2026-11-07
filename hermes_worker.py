@@ -23,19 +23,21 @@ from typing import Callable, Optional, Sequence
 from agent_backends import (
     SUBAGENT_COMPLETED,
     SUBAGENT_RUNNING,
-    AskQuestions,
-    Question,
-    QuestionOption,
     SubagentReport,
-    question_summary,
     subagent_line,
     subagent_status,
 )
+from questions import (
+    AskQuestions,
+    Question,
+    QuestionOption,
+    question_summary,
+)
 from hermes_backend import (
     JsonRpcCalls,
-    StdioTransport,
     Transport,
     WebSocketTransport,
+    local_transport,
     split_model_row,
     hermes_installed,
 )
@@ -643,10 +645,15 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         # usually half a word: released as it arrives, a screen reader reads
         # torn words. So a fragment is held until it completes a sentence, and
         # only whole sentences are released while the turn is still running.
+        # live_edge=True: a stop at the end of the buffer does not count while
+        # the stream is still growing, because the next fragment may carry the
+        # word on ("*.txt"). The end-tolerant rule would tear any token — a
+        # version number, a date, a file name — whose dot lands on a fragment
+        # boundary.
         self._fed_parts = 0
         self._answer_streamer = SentenceStreamer(
             lambda text: self._on_activity("assistant", text.rstrip()) if text.strip() else None,
-            live_edge=False,
+            live_edge=True,
         )
         self._thinking_parts: list[str] = []
         # Hermes sends the turn's finished reasoning as one replacement event;
@@ -853,7 +860,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
                     "Hermes Agent is not installed. See https://hermes-agent.nousresearch.com/docs"
                 )
                 return False
-            transport = StdioTransport(self._cwd)
+            transport = local_transport(self._cwd)
         try:
             transport.start()
         except OSError as exc:

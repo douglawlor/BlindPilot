@@ -15,6 +15,7 @@ prose counts as a question is tests/test_trailing_question.py.
 from __future__ import annotations
 
 import blindpilot_app as app
+from questions import Question, QuestionOption
 from doubles import Prompt
 
 
@@ -251,3 +252,35 @@ def test_a_message_sent_in_the_meantime_is_the_answer():
 
     assert panel.shown == []
     assert panel.sent == 0
+
+
+def test_a_block_is_answered_in_order_and_every_answer_is_sent():
+    # One line per question, in the order they were asked: the order every
+    # provider that takes a list of answers here already uses.
+    panel = _Answering([["Tabs"], ["/tmp", "/var"]])
+    block = (
+        Question(question="Which indent?", options=(QuestionOption("Tabs"),)),
+        Question(
+            question="Which paths?",
+            multi_select=True,
+            options=(QuestionOption("/tmp"), QuestionOption("/var")),
+        ),
+    )
+
+    app.SessionPanel._ask_question_left_in_the_answer(panel, block)
+
+    assert panel.sent_text == "Tabs\n/tmp; /var"
+    assert panel.sent == 1
+
+
+def test_a_block_reaches_the_dialog_with_its_options():
+    # The options are the whole reason the block exists: without them the
+    # dialog can only offer a text field.
+    panel = _Answering([["Tabs"]])
+    block = (Question(question="Which indent?", options=(QuestionOption("Tabs"),)),)
+
+    app.SessionPanel._ask_question_left_in_the_answer(panel, block)
+
+    questions, ended_turn = panel.shown[0]
+    assert ended_turn is True
+    assert questions[0].options[0].label == "Tabs"

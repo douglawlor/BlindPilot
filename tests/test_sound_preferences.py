@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import app_config
 import blindpilot_app as app
 
 
 def test_sound_cues_are_enabled_for_a_fresh_configuration(monkeypatch):
-    monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(app_config, "_load_config", dict)
 
     settings = app._Settings()
 
@@ -15,8 +16,8 @@ def test_sound_cues_are_enabled_for_a_fresh_configuration(monkeypatch):
 
 def test_sound_preference_is_saved_with_the_other_settings(monkeypatch):
     written = []
-    monkeypatch.setattr(app, "_load_config", lambda: {"backend": "codex"})
-    monkeypatch.setattr(app, "_save_config", lambda cfg: written.append(cfg))
+    monkeypatch.setattr(app_config, "_load_config", lambda: {"backend": "codex"})
+    monkeypatch.setattr(app_config, "_save_config", lambda cfg: written.append(cfg))
     settings = app._Settings()
     settings.sounds_enabled = False
 

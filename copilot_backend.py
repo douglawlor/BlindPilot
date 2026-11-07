@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Optional
 
 import agent_backends
+from owned_process import owned_popen
 from agent_backends import (
     BACKEND_COPILOT,
     SUBAGENT_COMPLETED,
@@ -60,11 +61,13 @@ from agent_backends import (
     SUBAGENT_RUNNING,
     _tool_use_label,
     _TurnWorker,
-    end_process_group,
     find_backend_cli,
+    subprocess_env,
+)
+from process_utils import (
+    end_process_group,
     no_window_kwargs,
     own_group_kwargs,
-    subprocess_env,
 )
 from markdown_rows import SentenceStreamer
 
@@ -248,7 +251,9 @@ class CopilotWorker(_TurnWorker):
         self._stderr_thread: Optional[threading.Thread] = None
         self._parts: list[str] = []
         self._streamer = SentenceStreamer(lambda text: self._on_activity("assistant", text))
-        self._started = False
+        # Not _started: threading.Thread owns that name for its own Event,
+        # and overwriting it makes .start() raise AttributeError.
+        self._started_notified = False
         self._completed = False
         self._message_id = ""
         self._streamed: set[str] = set()
@@ -307,7 +312,7 @@ class CopilotWorker(_TurnWorker):
             self._fail("GitHub Copilot CLI is not installed. Run: npm install -g @github/copilot")
             return
         try:
-            proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            proc = owned_popen(  # noqa: S603 - fixed argv, no shell
                 self._command(binary),
                 cwd=self._cwd or None,
                 stdin=subprocess.PIPE,
@@ -369,8 +374,8 @@ class CopilotWorker(_TurnWorker):
     # -- events ---------------------------------------------------------------
 
     def _notify_started(self) -> None:
-        if not self._started:
-            self._started = True
+        if not self._started_notified:
+            self._started_notified = True
             self._accepting_input.set()
             self._on_started()
 

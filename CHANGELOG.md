@@ -6,6 +6,39 @@ Release history for BlindPilot, newest first. Entries are short by design. The r
 
 - Ctrl+Enter or Shift+Enter in Recent Conversations and Hermes Conversations now opens a reading tab in the main window. Ctrl+Tab switches tabs, F6 moves between the document and the tab strip, and Ctrl+W or Escape closes the reading tab and returns to its originating session when available. A conversation that finishes loading in a background tab does not take focus or interrupt speech.
 
+## v0.55.3 - 2026-11-04
+
+- The 50 ms GUI budget from spec #125 is now enforced across the app: a blocking contract names the operations that may never run on the GUI thread (process starts, network reads, file scans, synchronous speech calls) and a guard test fails if a GUI callback reaches one. The remaining slow actions run on workers instead: GitHub clone, desktop-shortcut creation, setup CLI checks, history resume, changed-file and Claude file views, Hermes session actions, Muse.ai actions, and quitting, which now ends owned backend process trees off-thread; backend processes are pooled so starting one is not paid on the GUI thread either. Farhan Khan's PRs #128 and #129 landed as replacement #130, which also restores the `search_all_conversations` helper shipped in v0.55.1 (#126) that the branch had inlined away, and makes the branch's Windows-only test seams pass cross-platform. Landing note: the branch predated v0.55.1/v0.55.2 and carried APP_VERSION 0.55.0; the version regression was caught at release time and this release sets 0.55.3 directly - the Hermes running-gateway attach from v0.55.2 is present and unchanged.
+
+## v0.55.2 - 2026-11-04
+
+- Connecting to a local Hermes no longer spawns a second gateway when one is already running for the profile's home. `running_gateway_target` runs Hermes' own client bootstrap (`ui-tui/scripts/gateway_bootstrap.py`) under Hermes' interpreter to discover the running gateway and mint its session ticket, and `local_transport` attaches to it over its WebSocket with the ticket as a subprotocol; the session catalog, the model picker and the worker all take that path. When nothing is running -- or the installed Hermes predates the bootstrap -- a private gateway is spawned exactly as before. If a spawn still loses the race, the raw `[gateway-exit]` refusal is translated into an actionable message. The WSL path keeps spawning (its interpreter is not visible from Windows) and gets the translated message. Issue #127, reported by Devin Prater.
+
+## v0.55.1 - 2026-11-03
+
+- Find in All Conversations (Ctrl+Shift+S) no longer searches on the GUI thread. `search_all_conversations` collects the rows as a pure function and `_find_in_all_conversations` runs it on a worker, returning results through `_call_after_alive`; progress pulses through the progress dialog, aborting it cancels the search, and a generation counter drops a superseded search's results. Regression tests cover row collection, per-entry progress, and cancellation. Issue #126, first slice of the 50 ms GUI budget spec in #125.
+
+## v0.55.0 - 2026-11-03
+
+- Codex's model list is now read from the refreshed catalog (`codex debug models`) instead of the copy bundled inside the installed CLI (`--bundled`), which skipped the refresh. A model OpenAI retired stayed on offer until the Codex CLI itself was updated, and a new one stayed hidden until then. Models Codex marks hidden are no longer offered either — its own internal codex-auto-review was — and when the service cannot be reached the installed copy is used, with a spoken note that the list may be out of date.
+- A window left open re-reads each tab's model list on a timer and says which models were added or dropped, so a model retired mid-session is heard about rather than discovered when /model is next opened. The interval is in Preferences, 15 minutes by default; 0 turns the background read off. Command Code and opencode already read their lists live.
+
+## v0.54.4 - 2026-11-03
+
+A fix from Devin Prater (PR #122, landed as #123): the Hermes worker released a streamed answer the moment a sentence end reached the end of its buffer, so any token whose dot landed on a fragment boundary — a version number, a date, a file name, a list marker — was emitted mid-token and torn across two rows. The worker now uses the live-edge rule the other workers already use: while the stream is growing, a stop needs an actual following space before anything is released. The final text is unchanged.
+
+## v0.54.1 - 2026-11-02
+
+Fix: a Copilot turn could never start. The Copilot worker stored its own "started" flag under the name threading.Thread uses for its internal Event, so starting the worker thread raised AttributeError and the turn died before it ran. The flag now uses the same name as the other workers, and regression tests cover it.
+
+## v0.54.0 - 2026-11-01
+
+The Muser backend added in v0.53.0 is removed again, at the owner's request, for now. The muse.ai backend is unchanged, and no other backend is affected; Muser no longer appears as a backend to pick, install, update or sign in to, and its conversations no longer appear in Recent Conversations.
+
+## v0.53.0 - 2026-11-01
+
+New backend: Muser (https://github.com/nyarurant/muser), the muse.ai coding agent that runs on your own PC — full agent mode, unlike the muse.ai backend, whose agent runs on Meta's machine and can only chat. Windows only; the wizard installs it with npm (Node.js 22 or later), updates it, and signs it in with `muser login`, which covers both the muse.ai web sign-in and registering the PC as a Muse device. Turns run as `muser exec --json`, one process per message, resumed by session id; tool steps are announced as they happen and the answer arrives whole at the end of the turn, with cited sources listed. Permission modes map onto Muser's (Plan read-only, Accept edits is auto-edit, Auto and Bypass run with everything automatic — Muser has no reviewer mode). Muse picks its own model, so there is no model picker. Its conversations are in Recent Conversations with their task lists, its weekly muse.ai usage shows in Session Status, and its settings, instructions, skills and agent types are in Backend Settings and What Agents Know.
+
 ## v0.52.7 - 2026-11-02
 
 - Conversation lists (Recent Conversations, Hermes Conversations) can now read the selected conversation in an accessible web view. The web view uses wx-accessible-webview's AccessibleWebView to render the conversation as HTML: the conversation title is the one heading of level one, each exchange is a heading under it, the reading cursor is put into the conversation when it opens, and Escape closes it from inside the conversation. Nothing a conversation names is fetched by the web view showing it. Enter still opens the conversation in a new tab, the way the Open button does; Ctrl+Enter (or Shift+Enter) opens the web view instead.

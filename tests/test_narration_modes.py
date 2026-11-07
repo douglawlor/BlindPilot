@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pytest
 
+import app_config
 import blindpilot_app as app
 from doubles import panel_stub
 
@@ -51,7 +52,7 @@ def _capture(monkeypatch):
 # ----- the setting -----
 def test_following_everything_is_the_default(monkeypatch):
     """Nobody's narration goes quiet because of an upgrade they did not ask for."""
-    monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(app_config, "_load_config", dict)
 
     assert app._Settings().narration == app.NARRATION_EVERYTHING
 
@@ -59,15 +60,15 @@ def test_following_everything_is_the_default(monkeypatch):
 @pytest.mark.parametrize("stored", ["interpretive dance", [], {}, 3])
 def test_a_mode_this_version_does_not_know_falls_back(monkeypatch, stored):
     """A hand-edited or corrupt value, of any type, must not stop the app."""
-    monkeypatch.setattr(app, "_load_config", lambda: {"narration": stored})
+    monkeypatch.setattr(app_config, "_load_config", lambda: {"narration": stored})
 
     assert app._Settings().narration == app.NARRATION_EVERYTHING
 
 
 def test_the_choice_is_saved(monkeypatch):
     written: list[dict] = []
-    monkeypatch.setattr(app, "_load_config", lambda: {"backend": "codex"})
-    monkeypatch.setattr(app, "_save_config", written.append)
+    monkeypatch.setattr(app_config, "_load_config", lambda: {"backend": "codex"})
+    monkeypatch.setattr(app_config, "_save_config", written.append)
     settings = app._Settings()
     settings.narration = app.NARRATION_KEEP_UP
 

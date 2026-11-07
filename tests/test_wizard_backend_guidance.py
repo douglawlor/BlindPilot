@@ -19,7 +19,11 @@ import pytest
 
 import blindpilot_app as app
 import cli_install
-from agent_backends import BACKEND_CODEX, BACKEND_COMMANDCODE, BACKEND_HERMES
+from agent_backends import (
+    BACKEND_CODEX,
+    BACKEND_COMMANDCODE,
+    BACKEND_HERMES,
+)
 
 wx = pytest.importorskip("wx")
 

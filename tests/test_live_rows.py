@@ -25,9 +25,10 @@ from test_claude_stream_resilience import _FakeProc as _ClaudeFakeProc  # noqa: 
 
 
 def test_live_narration_is_enabled_for_a_fresh_configuration(monkeypatch):
+    import app_config
     import blindpilot_app
 
-    monkeypatch.setattr(blindpilot_app, "_load_config", dict)
+    monkeypatch.setattr(app_config, "_load_config", dict)
     settings = blindpilot_app._Settings()
 
     assert settings.live_rows is True

@@ -40,6 +40,14 @@ def test_the_remote_hermes_settings_live_with_the_config_file():
     assert app_config._RemoteHermes._key_path().parent == app_config._config_dir()
 
 
+def test_the_settings_object_lives_with_the_config_file():
+    # One settings object, built by the module that owns the file. A second
+    # copy in the old module would read whichever `_load_config` it could
+    # reach, and the two would disagree about what the file says.
+    assert blindpilot_app._Settings is app_config._Settings
+    assert blindpilot_app.SETTINGS is app_config.SETTINGS
+
+
 def test_the_load_and_save_functions_are_shared_by_import():
     # The same function object under two names: a caller in either module
     # reaches the same code, and replacing it in one place reaches both.

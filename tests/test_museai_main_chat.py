@@ -3,6 +3,7 @@
 
 import json
 import sys
+import time
 
 import agent_backends
 import blindpilot_app
@@ -11,6 +12,16 @@ import pytest
 import session_history
 import wx
 from test_tab_strip_focus import _frame, _running_app
+
+
+def _wait(predicate, timeout=3):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        wx.GetApp().Yield()
+        if predicate():
+            return
+        time.sleep(0.01)
+    assert predicate()
 
 
 def test_python_cli_probes_can_print_unicode_chat_history(monkeypatch):
@@ -35,6 +46,13 @@ def test_restored_main_chat_follows_changes_from_its_loaded_sequence(monkeypatch
             panel._museai_checked("main", 11)
             assert launches and panel._museai_follow_after == 10
         finally:
+            # A follow starts the working cue, and the turn it belongs to is
+            # the one stubbed out above, so nothing here ever ends it. Left
+            # running the cue's thread outlives the test and keeps spawning a
+            # player -- `afplay` on macOS -- which the next test that patches
+            # `subprocess` counts as a launch of its own. `cancel_worker` is
+            # what stops the cue when a tab really closes.
+            frame.earcons.stop_progress()
             frame.Destroy()
 
 
@@ -75,6 +93,14 @@ def test_discuss_prepares_main_chat_draft_and_preserves_another_tabs_prompt(monk
             _chats, calls = _gateway(monkeypatch, tmp_path)
             previous = frame.notebook.GetCurrentPage()
             previous.prompt.SetValue("Keep this draft")
+            loaded = []
+            original_restore = blindpilot_app.SessionPanel.restore_history
+
+            def track_restore(panel, entry, turns):
+                original_restore(panel, entry, turns)
+                loaded.append(panel)
+
+            monkeypatch.setattr(blindpilot_app.SessionPanel, "restore_history", track_restore)
 
             class Discussion:
                 chat_request = ("draft", "Article context\nMy question: ", "Article")
@@ -93,6 +119,7 @@ def test_discuss_prepares_main_chat_draft_and_preserves_another_tabs_prompt(monk
 
             monkeypatch.setattr(blindpilot_app, "MuseAiDialog", Discussion)
             frame._museai_active("feed")
+            _wait(lambda: bool(loaded))
             panel = frame.notebook.GetCurrentPage()
             assert panel is not previous and panel._session_id == "main"
             assert panel.prompt.GetValue() == "Article context\nMy question: "
@@ -125,6 +152,7 @@ def test_switching_to_museai_loads_main_and_new_conversation_still_starts_a_side
             monkeypatch.setattr(frame, "_announce_setting", lambda _text: None)
             frame._set_backend("museai")
             panel = frame.notebook.GetCurrentPage()
+            _wait(lambda: panel._session_id == "main")
             assert panel._session_id == "main"
             assert [(t.prompt, t.response) for t in panel._turns] == [("Remember me?", "Yes.")]
             assert "Main chat" in frame.notebook.GetPageText(frame.notebook.GetSelection())
@@ -134,6 +162,7 @@ def test_switching_to_museai_loads_main_and_new_conversation_still_starts_a_side
             assert panel._session_id is None
 
             new_panel = frame._add_session(str(tmp_path))
+            _wait(lambda: new_panel._session_id == "main")
             assert new_panel._session_id == "main"
         finally:
             frame.Destroy()
@@ -146,9 +175,11 @@ def test_reopening_a_side_chat_does_not_load_main_first(monkeypatch, tmp_path):
             _chats, calls = _gateway(monkeypatch, tmp_path)
             monkeypatch.setattr(frame, "_announce_setting", lambda _text: None)
             frame._set_backend("museai")
+            _wait(lambda: frame.notebook.GetCurrentPage()._session_id == "main")
             calls.clear()
             entry = session_history.HistoryEntry("museai", "side", "Side chat", "", 0)
             frame._resume_history(entry)
+            _wait(lambda: frame.notebook.GetCurrentPage()._session_id == "side")
             assert frame.notebook.GetCurrentPage()._session_id == "side"
             assert calls == [["history", "--thread", "side", "--limit", "300"]]
         finally:
@@ -162,8 +193,8 @@ def test_clearing_an_unanswered_main_chat_cancels_its_queued_follow(monkeypatch,
             _gateway(monkeypatch, tmp_path)
             monkeypatch.setattr(frame, "_announce_setting", lambda _text: None)
             frame._set_backend("museai")
-            wx.Yield()
             panel = frame.notebook.GetCurrentPage()
+            _wait(lambda: panel._session_id == "main")
             launches = []
             monkeypatch.setattr(panel, "_launch_turn", lambda *args: launches.append(args))
             entry = session_history.HistoryEntry("museai", "main", "Main chat", "", 0)
@@ -171,6 +202,24 @@ def test_clearing_an_unanswered_main_chat_cancels_its_queued_follow(monkeypatch,
             panel.clear_conversation()
             wx.Yield()
             assert launches == []
+        finally:
+            frame.Destroy()
+
+
+def test_pending_main_chat_send_is_discarded_after_backend_switch(monkeypatch, tmp_path):
+    with _running_app():
+        frame = _frame(monkeypatch, tmp_path)
+        try:
+            panel = frame.notebook.GetCurrentPage()
+            panel._backend = panel._session_backend = "museai"
+            panel._museai_main_serial = 3
+            sends = []
+            monkeypatch.setattr(panel, "send_now", lambda: sends.append(True))
+
+            panel._backend = "codex"
+            panel._send_museai_pending(3)
+
+            assert sends == []
         finally:
             frame.Destroy()
 
@@ -188,9 +237,15 @@ def test_a_failed_main_chat_lookup_keeps_the_prompt_without_sending_to_a_side_ch
             panel = frame.notebook.GetCurrentPage()
             panel.prompt.SetValue("Send this to the main chat")
             panel.send_now()
+            _wait(lambda: "Error:" in panel.last_status)
             assert panel.prompt.GetValue() == "Send this to the main chat"
             assert panel._session_id is None
-            assert calls == [["threads"], ["threads"]]
+            assert calls == [["threads"]]
+
+            # A later Enter retries the failed lookup and still preserves prompt.
+            panel.send_now()
+            _wait(lambda: calls == [["threads"], ["threads"]])
+            _wait(lambda: "Error:" in panel.last_status)
 
             # Choosing an existing side chat must release the failed default lookup.
             entry = session_history.HistoryEntry("museai", "side", "Side chat", "", 0)
@@ -215,6 +270,8 @@ def test_switching_backends_never_replaces_an_active_turn(monkeypatch, tmp_path,
             monkeypatch.setattr(panel, "_run_in_progress", lambda: running)
             monkeypatch.setattr(frame, "_announce_setting", lambda _text: None)
             frame._set_backend("museai")
+            if not running:
+                _wait(lambda: panel._session_id == "main")
             assert panel._session_id == ("claude-session" if running else "main")
             assert panel._turns[0].prompt == ("Old question" if running else "Remember me?")
             assert panel._pending_messages == (["Old queued message"] if running else [])

@@ -39,6 +39,7 @@ import os
 import platform
 import queue
 import re
+import signal
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -67,7 +68,7 @@ from accessible_ai.storage.paths import bundle_dir as _mac_bundle_dir
 # goes with them is read as screen_speech.<name>, never imported, because
 # announce() reassigns it and an imported copy would go stale.
 import screen_speech
-from screen_speech import announce, repeat_last_announcement
+from screen_speech import _speak_windows_announcement, announce, repeat_last_announcement  # noqa: F401
 
 # Where the settings live and how they are read and written. `_load_config`
 # and `_save_config` are imported by name, so a caller here can still replace
@@ -89,13 +90,16 @@ from app_config import (
     NARRATION_KEEP_UP,
     NARRATION_MODES,
     REMOTE_HERMES,
+    SETTINGS,
     SOUND_CUES,
     _ALWAYS_SPOKEN,
     _RemoteHermes,  # noqa: F401 - read as blindpilot_app._RemoteHermes
+    _Settings,  # noqa: F401 - compatibility for callers
     _load_config,
     _save_config,
     _valid_appearance,
     _valid_cue_seconds,
+    _valid_model_refresh_minutes,
     _valid_progress_cue,
 )
 
@@ -158,6 +162,8 @@ import backend_pool
 from backend_updates import BackendUpdateResult, BackendUpdateService, BackendUpdateState
 import claude_session
 import diagnostics
+from dialog_tasks import TaskSlot
+from question_dialog import QuestionDialog
 from conversation_list import make_conversation_list
 from conversation_items import ConversationItem, ConversationItemsDialog, collect_items
 from history_status import history_diagnostics
@@ -195,24 +201,19 @@ from agent_backends import (
     SUBAGENT_FAILED,
     SUBAGENT_RUNNING,
     SUBAGENT_STOPPED,
+    UNBOUND,
     AgentWorker,
-    AskQuestions,
     SubagentReport,
-    Question,
-    QuestionOption,
-    _questions,
     backend_auth_ok,
     backend_label,
     backend_status,
     blindpilot_data_dir,
-    is_an_offer_to_carry_on,
-    no_window_kwargs,
-    trailing_question,
+    migrate_macos_legacy_dirs,
     codex_model_options,
+    codex_plan_account,
     compaction_request,
     discard_freebuff_prewarm,
     end_hidden_terminal,
-    end_process_group,
     find_backend_cli,
     freebuff_model_options,
     ignore_subagents,
@@ -229,12 +230,24 @@ from agent_backends import (
     opencode_oauth_start,
     opencode_providers,
     settings_files,
-    own_group_kwargs,
     prewarm_freebuff,
-    question_summary,
     spawn_hidden_terminal,
     subprocess_env,
     worker_class,
+)
+from questions import (
+    AskQuestions,
+    Question,
+    _questions,
+    is_an_offer_to_carry_on,
+    questions_written_in_the_answer,
+    trailing_question,
+    question_summary,
+)
+from process_utils import (
+    no_window_kwargs,
+    end_process_group,
+    own_group_kwargs,
 )
 from hermes_backend import (
     hermes_model_options,
@@ -270,6 +283,7 @@ from session_history import (
     restore_tasks,
 )
 
+
 # Said when a settings write failed, in place of the sentence that would claim
 # a change the file did not keep.
 _SAVE_FAILED = "Error: could not save settings"
@@ -285,7 +299,11 @@ def _call_after_alive(callback: Callable[..., object], *args: object) -> None:
     """
     if wx.GetApp() is None:
         return
-    wx.CallAfter(callback, *args)
+    try:
+        wx.CallAfter(callback, *args)
+    except Exception:
+        if wx.GetApp() is not None:
+            raise
 
 
 APP_NAME = "BlindPilot"
@@ -296,7 +314,7 @@ APP_NAME = "BlindPilot"
 # share a left edge.
 PAD = 8
 PAD_DIALOG = 12
-APP_VERSION = "0.52.7"
+APP_VERSION = "0.55.11"
 APP_MODE_AGENT = "agent"
 APP_MODE_CHAT = "chat"
 APP_MODE_LABELS = {APP_MODE_AGENT: "Agent", APP_MODE_CHAT: "Chat"}
@@ -313,6 +331,80 @@ CHAT_MODEL_ORDERS = (
 # the responses control only once for each batch.
 _WORKER_EVENT_BATCH_SIZE = 16
 _WORKER_EVENT_BUDGET_SECONDS = 0.02
+
+# ----- GUI-thread budget -----
+#
+# Nothing may block the GUI thread. That rule has been in this project's
+# reviews for a while and nothing enforced it, so a handler that reads a
+# provider CLI or waits on a process still runs to completion before the
+# window repaints, and the keystrokes behind it are lost.
+#
+# A shortcut handler is expected to return inside this budget. Work that can
+# exceed it belongs on a worker, with the handler returning at once and the
+# answer filled in when it arrives. `_gui_work` measures what each handler
+# actually spends and records anything over the line, so the offending handler
+# is named rather than guessed at.
+GUI_BUDGET_MS = 50.0
+
+# Newest last, and bounded: a stalled window produces one entry per keystroke,
+# and the record must not grow without limit on a machine that is having a bad
+# day. Read by the tests that guard a handler, written only by `_gui_work`.
+_over_budget_work: deque[tuple[str, float]] = deque(maxlen=200)
+
+
+def over_budget_work() -> list[tuple[str, float]]:
+    """(name, milliseconds) for every GUI-thread callback that ran long.
+
+    Newest last, and a copy, so nothing a caller does can disturb what the
+    window recorded.
+    """
+    return list(_over_budget_work)
+
+
+def _gui_work(name: str, action: Callable[..., object]) -> Callable[..., None]:
+    """Wrap a GUI-thread callback so what it spends is measured and recorded.
+
+    Event and CallAfter arguments pass through unchanged. Over-budget work is
+    logged at DEBUG and filed in `over_budget_work`.
+    """
+    logger = logging.getLogger("blindpilot.timing")
+
+    def run(*args: object, **kwargs: object) -> None:
+        started = time.perf_counter()
+        try:
+            action(*args, **kwargs)
+        finally:
+            spent = (time.perf_counter() - started) * 1000.0
+            if spent > GUI_BUDGET_MS:
+                _over_budget_work.append((name, spent))
+                logger.debug("%s spent %.0f ms on the GUI thread", name, spent)
+
+    return run
+
+
+_ORIGINAL_CALL_AFTER = wx.CallAfter
+_ORIGINAL_CALL_LATER = wx.CallLater
+
+
+def _measured_call_after(callback, *args, **kwargs):
+    name = getattr(callback, "__qualname__", getattr(callback, "__name__", "callback"))
+    return _ORIGINAL_CALL_AFTER(_gui_work(f"CallAfter: {name}", lambda: callback(*args, **kwargs)))
+
+
+wx.CallAfter = _measured_call_after  # type: ignore[assignment]
+
+
+def _measured_call_later(milliseconds, callback, *args, **kwargs):
+    name = getattr(callback, "__qualname__", getattr(callback, "__name__", "callback"))
+    return _ORIGINAL_CALL_LATER(
+        milliseconds,
+        _gui_work(f"CallLater: {name}", lambda: callback(*args, **kwargs)),
+    )
+
+
+wx.CallLater = _measured_call_later  # type: ignore[misc, assignment]
+
+
 ORIGINAL_APP_CREDIT = (
     "Based on the original Claude Code Reader application by doubletaponair.\n"
     "https://github.com/doubletaponair/claude-code-reader"
@@ -336,6 +428,15 @@ def about_description() -> str:
         "BlindPilot preserves and extends its accessibility-first work.\n\n"
         "Licensed under the MIT License. See LICENSE and CREDITS.md."
     )
+
+
+# ---------------------------------------------------------------------------
+# Installing Claude Code, and making it visible to every shell.
+#
+# Both official native installers are documented at code.claude.com/docs/en/setup.
+# Neither needs administrator rights or Node.js: they drop a real binary in
+# ~/.local/bin and self-update from then on.
+# ---------------------------------------------------------------------------
 
 
 def _open_web_page(url: str) -> bool:
@@ -448,6 +549,14 @@ AUTO_MODEL_CHOICE = "Auto (choose for each task)"
 # deliberately loaded only when /model or /models is opened, keeping normal
 # application startup fast and quiet.
 PROBE_TTL_SECONDS = 900
+# How often a background timer re-reads a tab's model catalog, in minutes, and
+# the range Preferences offers. The probe costs a provider CLI start each time
+# -- and on opencode that can mean starting its server -- so 0 turns the
+# refresh off for anyone who would rather not pay that, and the default is the
+# probe's own TTL so a cached answer is refreshed just as it would go stale.
+MODEL_REFRESH_MINUTES_DEFAULT = PROBE_TTL_SECONDS // 60
+MODEL_REFRESH_MINUTES_MIN = 0
+MODEL_REFRESH_MINUTES_MAX = 240
 
 
 def _keep_choice(current: str) -> str:
@@ -1023,7 +1132,8 @@ _HERMES_SLASH_COMMANDS: list[tuple[str, str]] = [
 ]
 
 
-def _slash_commands_for_backend(backend: str, cwd: Optional[str] = None) -> list[tuple[str, str]]:
+def _static_slash_commands_for_backend(backend: str) -> list[tuple[str, str]]:
+    """The commands that need no backend probe, and so can be shown at once."""
     commands = list(_BLINDPILOT_SLASH_COMMANDS)
     backend = normalize_backend(backend)
     if backend == BACKEND_CLAUDE:
@@ -1034,6 +1144,16 @@ def _slash_commands_for_backend(backend: str, cwd: Optional[str] = None) -> list
         commands.extend(_HERMES_SLASH_COMMANDS)
     elif backend == BACKEND_OPENCODE:
         commands.extend(_OPENCODE_SLASH_COMMANDS)
+    elif backend == BACKEND_COMMANDCODE:
+        commands.extend(_COMMANDCODE_SLASH_COMMANDS)
+    return commands
+
+
+def _slash_commands_for_backend(backend: str, cwd: Optional[str] = None) -> list[tuple[str, str]]:
+    """The commands this backend offers, including the ones it is asked for."""
+    commands = _static_slash_commands_for_backend(backend)
+    backend = normalize_backend(backend)
+    if backend == BACKEND_OPENCODE:
         # Whatever this directory's opencode actually offers, which is its two
         # built-in commands plus any the project defines for itself.
         commands.extend(
@@ -1041,7 +1161,6 @@ def _slash_commands_for_backend(backend: str, cwd: Optional[str] = None) -> list
             for name, description in opencode_commands(cwd)
         )
     elif backend == BACKEND_COMMANDCODE:
-        commands.extend(_COMMANDCODE_SLASH_COMMANDS)
         # Then whatever Command Code itself offers: its agent's commands
         # (skills, mods, /loop), sent as typed, and its console's built-ins,
         # run in its console off screen. Cached; the first look in a folder
@@ -1067,6 +1186,37 @@ def _slash_commands_for_backend(backend: str, cwd: Optional[str] = None) -> list
             for name, description in muse_skills(cwd)
         )
     return commands
+
+
+_SLASH_COMMANDS_REFRESH = "Refresh the command list (checks the backend)"
+_slash_commands_cache: dict[tuple[str, str], list[tuple[str, str]]] = {}
+
+
+def _slash_commands_cache_key(backend: str, cwd: Optional[str]) -> tuple[str, str]:
+    """The same backend and folder spelled differently still share their warm list."""
+    folder = os.path.normcase(os.path.abspath(cwd)) if cwd else ""
+    return normalize_backend(backend), folder
+
+
+def cached_slash_commands(backend: str, cwd: Optional[str]) -> Optional[list[tuple[str, str]]]:
+    """The warm command list for this backend and folder, or None."""
+    return _slash_commands_cache.get(_slash_commands_cache_key(backend, cwd))
+
+
+def remember_slash_commands(
+    backend: str, cwd: Optional[str], commands: list[tuple[str, str]]
+) -> None:
+    """Keep a completed probe warm, so the next open does not ask again."""
+    _slash_commands_cache[_slash_commands_cache_key(backend, cwd)] = list(commands)
+
+
+def forget_slash_commands(backend: str, cwd: Optional[str]) -> None:
+    """Drop a warm list, so Refresh asks the backend again."""
+    _slash_commands_cache.pop(_slash_commands_cache_key(backend, cwd), None)
+
+
+def _slash_command_labels(commands: list[tuple[str, str]]) -> list[str]:
+    return [f"{cmd}. {desc}" for cmd, desc in commands] + [_SLASH_COMMANDS_REFRESH]
 
 
 # BlindPilot runs its backends hands-off: a run that stops to ask a question
@@ -1261,6 +1411,36 @@ def search_turns(turns: Sequence[HistoryTurn], term: str) -> list[tuple[int, str
             snippet = ("…" if start else "") + snippet + ("…" if end < len(text) else "")
             found.append((index, f"{who}: {snippet}", f"{who}: {text}"))
     return found
+
+
+def search_all_conversations(
+    entries: Sequence[HistoryEntry],
+    term: str,
+    on_progress: Optional[Callable[[int, str], None]] = None,
+    is_cancelled: Optional[Callable[[], bool]] = None,
+    load: Optional[Callable[[HistoryEntry], List[HistoryTurn]]] = None,
+) -> list[tuple[str, HistoryEntry, int, str]]:
+    """Search every past conversation for `term`: (row label, entry, turn, whole).
+
+    Pure disk and database work, so the caller runs this on a worker thread
+    and brings the rows back to the GUI thread. `on_progress(done, title)`
+    fires before each entry is read; when `is_cancelled()` turns true the
+    search stops early and the caller discards the partial rows.
+    """
+    loader = load if load is not None else load_turns
+    rows: list[tuple[str, HistoryEntry, int, str]] = []
+    for done, entry in enumerate(entries):
+        if is_cancelled is not None and is_cancelled():
+            break
+        if on_progress is not None:
+            on_progress(done, entry.title)
+        for index, snippet, whole in search_turns(loader(entry), term):
+            label = (
+                f"{entry.title}, {backend_label(entry.backend)}, "
+                f"{describe_age(entry.modified)}: {snippet}"
+            )
+            rows.append((label, entry, index, whole))
+    return rows
 
 
 def relay_message(speaker: str, text: str) -> str:
@@ -1486,6 +1666,40 @@ def changed_files(cwd: str) -> Optional[tuple[str, list[tuple[str, str, bool]]]]
         label = f"{os.path.basename(path)}, {what}{where}"
         described.append((path, label, path in new))
     return root, described
+
+
+_changed_files_cache: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {}
+
+
+def _changed_files_cache_key(cwd: str) -> str:
+    """The same folder spelled differently still shares its warm listing."""
+    return os.path.normcase(os.path.abspath(cwd))
+
+
+def cached_changed_files(cwd: str) -> Optional[tuple[str, list[tuple[str, str, bool]]]]:
+    """A folder's warm changed-file listing, or None when nothing is warm.
+
+    Only a listing with entries is kept: an empty answer and "not a repository"
+    both have to be asked again, so a folder that has just gained its first
+    change is never hidden behind a remembered empty list.
+    """
+    return _changed_files_cache.get(_changed_files_cache_key(cwd))
+
+
+def remember_changed_files(
+    cwd: str, found: Optional[tuple[str, list[tuple[str, str, bool]]]]
+) -> None:
+    """Keep a folder's listing warm, and forget an answer with nothing to list."""
+    key = _changed_files_cache_key(cwd)
+    if found is not None and found[1]:
+        _changed_files_cache[key] = found
+    else:
+        _changed_files_cache.pop(key, None)
+
+
+def forget_changed_files(cwd: str) -> None:
+    """Drop a folder's warm listing, so the next open asks Git again."""
+    _changed_files_cache.pop(_changed_files_cache_key(cwd), None)
 
 
 # Lines of a unified diff that describe the files rather than change them.
@@ -2331,98 +2545,11 @@ def _valid_chat_model_order(value: object) -> str:
     return value if isinstance(value, str) and value in orders else "newest"
 
 
-class _Settings:
-    """User preferences that change how a run is presented, saved to config.
-
-    ``live_rows`` and ``speak_live`` default to on, so activity appears in the
-    list and is spoken automatically through NVDA, JAWS, or VoiceOver. Turning both off restores the
-    pre-live-narration behaviour: nothing appears until the turn ends, and
-    nothing is spoken. ``text_view`` swaps the responses list for a read-only
-    edit field and defaults to off.
-
-    ``progress_cue`` decides how the working cue behaves while a turn runs:
-
-    ``loop``
-        the original behaviour, the cue repeating end to end for the whole turn
-    ``periodic``
-        the cue once every ``progress_cue_seconds``, so a long run still says it
-        is alive without repeating over the answer being spoken
-    ``off``
-        no working cue at all; send and received still play
-
-    ``periodic`` is the default. The cue file is under a second long, so looping
-    it means dozens of repeats per turn on top of the speech, and until now
-    there was no way to turn it down.
-    """
-
-    def __init__(self) -> None:
-        cfg = _load_config()
-        self.live_rows = bool(cfg.get("live_rows", True))
-        self.speak_live = bool(cfg.get("speak_live", True))
-        self.sounds_enabled = bool(cfg.get("sounds_enabled", True))
-        # A mode this version does not know is somebody else's config, not an
-        # instruction to go quiet.
-        narration = cfg.get("narration")
-        self.narration = (
-            narration
-            if isinstance(narration, str)
-            and narration in {mode for mode, _label, _help in NARRATION_MODES}
-            else NARRATION_EVERYTHING
-        )
-        # `sounds_enabled` above is the master switch and keeps its meaning.
-        # These say which cues it turns on, because the three are not
-        # interchangeable: "working" is a loop that runs for the whole turn,
-        # so wanting it gone is not the same wish as wanting silence.
-        #
-        # Missing keys default to on, so a configuration written before this
-        # existed reads as it always did; unknown ones are dropped, so one
-        # written by a newer version cannot mute or break this one.
-        stored = cfg.get("sound_cues")
-        stored = stored if isinstance(stored, dict) else {}
-        self.sound_cues = {cue: bool(stored.get(cue, True)) for cue, _label, _help in SOUND_CUES}
-        self.text_view = bool(cfg.get("text_view", False))
-        self.show_thinking = bool(cfg.get("show_thinking", False))
-        # Whether a question a turn only wrote into its answer opens the same
-        # dialog a question asked through the backend's own tool opens. On by
-        # default: a turn that ends waiting on an answer nobody was told about
-        # is the thing this exists to stop. It can be turned off because the
-        # judgement is a reading of prose and can be wrong, and a dialog that
-        # opens when nothing was asked interrupts.
-        self.ask_written_questions = bool(cfg.get("ask_written_questions", True))
-        # A system notification when a turn ends, fails or asks something while
-        # another application has focus. Nothing is shown while BlindPilot is
-        # in front: the announcement already said it.
-        self.notify_in_background = bool(cfg.get("notify_in_background", True))
-        # Read your message back as it goes, so you hear what was actually
-        # sent: dictation and paste put text in the prompt nobody heard.
-        self.read_back_sent = bool(cfg.get("read_back_sent", True))
-        self.progress_cue = _valid_progress_cue(cfg.get("progress_cue"))
-        self.progress_cue_seconds = _valid_cue_seconds(cfg.get("progress_cue_seconds"))
-        # Read again in main() before the first window, which is the only
-        # point wxWidgets lets it be set. Kept here so Preferences can show
-        # and save it like the rest.
-        self.appearance = _valid_appearance(cfg.get("appearance"))
-
-    def save(self) -> bool:
-        """Write the settings out. False means the file did not take them."""
-        cfg = _load_config()
-        cfg["live_rows"] = self.live_rows
-        cfg["speak_live"] = self.speak_live
-        cfg["sounds_enabled"] = self.sounds_enabled
-        cfg["narration"] = self.narration
-        cfg["sound_cues"] = self.sound_cues
-        cfg["text_view"] = self.text_view
-        cfg["show_thinking"] = self.show_thinking
-        cfg["ask_written_questions"] = self.ask_written_questions
-        cfg["notify_in_background"] = self.notify_in_background
-        cfg["read_back_sent"] = self.read_back_sent
-        cfg["progress_cue"] = self.progress_cue
-        cfg["progress_cue_seconds"] = self.progress_cue_seconds
-        cfg["appearance"] = self.appearance
-        return _save_config(cfg)
-
-
-SETTINGS = _Settings()
+# Before any setting is read: an install that predates the macOS conventions
+# keeps its files in ~/.config and ~/.local/share, and they belong in
+# ~/Library/Application Support. The move is on the import path because
+# `SETTINGS` immediately below reads config.json to build itself.
+migrate_macos_legacy_dirs()
 
 
 def _resource_dir() -> str:
@@ -3897,10 +4024,11 @@ def _speech_route() -> str:
         return "VoiceOver announcements" if screen_speech._MAC_ANNOUNCE else "none (AppKit missing)"
     if platform.system() == "Linux":
         return "ATK announcements to Orca"
-    # Read through the module, not a name imported from it: announce()
-    # rebuilds the reader when it restarts, and a copy taken at import time
-    # would still say the reader was missing.
-    return "accessible_output2" if screen_speech._SPEAKER is not None else "none found"
+    if screen_speech._SPEAKER is not None:
+        return "accessible_output2"
+    return (
+        "accessible_output2 (pending)" if not screen_speech._SPEAKER_INITIALIZED else "none found"
+    )
 
 
 def bug_report_facts(backend: str, app_mode: str) -> str:
@@ -4429,6 +4557,8 @@ class MuseAiDialog(wx.Dialog):
         self.goal = goal
         self.chat_request: Optional[tuple[str, str, str]] = None
         self.items: list[dict] = []
+        self._action_task = TaskSlot(_call_after_alive)
+        self._busy = False
         pad = self.FromDIP(PAD_DIALOG)
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(wx.StaticText(self, label=f"&{view.title()}:"), 0, wx.ALL, pad)
@@ -4480,29 +4610,69 @@ class MuseAiDialog(wx.Dialog):
         if self.decide:
             self.decide.Bind(wx.EVT_BUTTON, lambda _e: self._decide())
             buttons.Add(self.decide, 0, wx.RIGHT, pad)
-        refresh = wx.Button(self, label="Re&fresh")
-        refresh.Bind(wx.EVT_BUTTON, lambda _e: self._refresh())
-        buttons.Add(refresh, 0, wx.RIGHT, pad)
+        self.refresh_button = wx.Button(self, label="Re&fresh")
+        self.refresh_button.Bind(wx.EVT_BUTTON, lambda _e: self._refresh())
+        buttons.Add(self.refresh_button, 0, wx.RIGHT, pad)
         buttons.Add(wx.Button(self, wx.ID_CANCEL, "Close"))
         sizer.Add(buttons, 0, wx.ALL, pad)
         self.SetSizerAndFit(sizer)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
         self._refresh()
-        (self.list if self.items else refresh).SetFocus()
+        self.list.SetFocus()
         self.CentreOnParent()
+
+    def _start_action(
+        self, label: str, work: Callable[[], object], done: Callable[[object], None]
+    ) -> None:
+        self._busy = True
+        self.status.SetLabel(label)
+        announce(label)
+        self.list.Enable(False)
+        self._selection_changed()
+
+        self._action_task.start(
+            work,
+            lambda result, error: self._action_finished(label, result, error, done),
+        )
+
+    def _action_finished(
+        self,
+        label: str,
+        result: object,
+        error: str,
+        done: Callable[[object], None],
+    ) -> None:
+        if not self:
+            return
+        self._busy = False
+        self.list.Enable(True)
+        self._selection_changed()
+        if error:
+            message = f"{label}: {error}"
+            self.status.SetLabel(message)
+            announce(message)
+            return
+        done(result)
+
+    def Destroy(self) -> bool:  # type: ignore[override]
+        self._action_task.close()
+        return super().Destroy()
 
     def _refresh(self) -> None:
         from museai_backend import museai_items, museai_item_title, museai_goal_suggestions
 
         self.items = []
         self.list.Clear()
-        try:
-            with wx.BusyCursor():
-                self.items = (
-                    museai_goal_suggestions(self.goal)
-                    if self.view == "suggestions" and self.goal is not None
-                    else museai_items(self.view)
-                )
+
+        def load() -> object:
+            return (
+                museai_goal_suggestions(self.goal)
+                if self.view == "suggestions" and self.goal is not None
+                else museai_items(self.view)
+            )
+
+        def loaded(value: object) -> None:
+            self.items = value if isinstance(value, list) else []
             self.list.Set([museai_item_title(self.view, item) for item in self.items])
             if self.items:
                 self.list.SetSelection(0)
@@ -4511,15 +4681,29 @@ class MuseAiDialog(wx.Dialog):
                 if self.items
                 else f"No {self.view}."
             )
-        except ValueError as exc:
-            self.items = []
-            self.list.Clear()
-            message = f"Could not read muse.ai {self.view}: {exc}"
-        self.status.SetLabel(message)
-        self._selection_changed()
-        announce(message)
+            self.status.SetLabel(message)
+            self._selection_changed()
+            announce(message)
+
+        self._start_action(f"Loading muse.ai {self.view}…", load, loaded)
 
     def _selection_changed(self) -> None:
+        if self._busy:
+            for button in (
+                self.read,
+                self.discuss,
+                self.run,
+                self.links,
+                self.history,
+                self.manage,
+                self.suggestions,
+                self.dismiss,
+                self.decide,
+                self.refresh_button,
+            ):
+                if button:
+                    button.Enable(False)
+            return
         selected = self.list.GetSelection()
         valid = 0 <= selected < len(self.items)
         self.read.Enable(valid)
@@ -4568,14 +4752,18 @@ class MuseAiDialog(wx.Dialog):
         item = self._selected()
         if item is None:
             return
-        try:
-            with wx.BusyCursor():
-                item = museai_read_item(self.view, item)
-            text = f"I'd like to discuss this muse.ai {self.view} item:\n\n{museai_item_text(self.view, item)}\n\nMy question: "
-            self.chat_request = ("draft", text, museai_item_title(self.view, item))
+
+        def prepare() -> object:
+            read = museai_read_item(self.view, item)
+            text = f"I'd like to discuss this muse.ai {self.view} item:\n\n{museai_item_text(self.view, read)}\n\nMy question: "
+            return (text, museai_item_title(self.view, read))
+
+        def prepared(value: object) -> None:
+            text, title = cast("tuple[str, str]", value)
+            self.chat_request = ("draft", text, title)
             self.EndModal(wx.ID_OK)
-        except ValueError as exc:
-            announce(f"Could not prepare the discussion: {exc}")
+
+        self._start_action("Preparing discussion…", prepare, prepared)
 
     def _open_link(self) -> None:
         from museai_backend import museai_item_links
@@ -4592,88 +4780,110 @@ class MuseAiDialog(wx.Dialog):
                 if dialog.ShowModal() != wx.ID_OK:
                     return
                 url = urls[dialog.GetSelection()]
-        if not _open_web_page(url):
-            announce("Could not open this link in your browser.")
+
+        def opened(ok: object) -> None:
+            if not ok:
+                message = "Could not open this link in your browser."
+                self.status.SetLabel(message)
+                announce(message)
+
+        self._start_action("Opening link…", lambda: _open_web_page(url), opened)
 
     def _run(self) -> None:
         from museai_backend import (
             museai_read_item,
             museai_run_idea,
             museai_run_schedule,
-            museai_action_session,
             museai_goal_decide,
-            museai_item_title,
             _museai_id,
         )
 
         item = self._selected()
         if item is None or not self.run or not self.run.IsEnabled():
             return
-        try:
-            if self.view == "suggestions":
-                assert self.goal is not None
-                result = museai_goal_decide(
-                    _museai_id(self.goal, "goal_id", "id"), item, "accepted"
-                )
-            elif self.view == "schedules":
-                with wx.BusyCursor():
-                    result = museai_run_schedule(item)
-            else:
-                parts = None
-                if self.view == "ideas":
-                    with wx.BusyCursor():
-                        item = museai_read_item(self.view, item)
-                    choices = [
-                        part
-                        for part in item.get("items", [])
-                        if isinstance(part, dict)
-                        and part.get("selectable") is not False
-                        and part.get("id")
-                    ]
-                    if choices:
-                        with wx.SingleChoiceDialog(
-                            self,
-                            "What would you like to run?",
-                            museai_item_title(self.view, item),
-                            ["Whole idea", "Choose parts…"],
-                        ) as dialog:
-                            if dialog.ShowModal() != wx.ID_OK:
-                                return
-                            selected = dialog.GetSelection()
-                        if selected == 1:
-                            labels = [
-                                str((part.get("content") or {}).get("title") or part["id"])
-                                for part in choices
-                            ]
-                            with wx.MultiChoiceDialog(
-                                self, "Choose parts to run:", "Run selected parts", labels
-                            ) as dialog:
-                                dialog.SetSelections(
-                                    [
-                                        i
-                                        for i, part in enumerate(choices)
-                                        if part.get("isSelected") is not False
-                                    ]
-                                )
-                                if dialog.ShowModal() != wx.ID_OK:
-                                    return
-                                parts = [str(choices[i]["id"]) for i in dialog.GetSelections()]
-                with wx.BusyCursor():
-                    result = museai_run_idea(item, parts)
-            announce("muse.ai accepted the action.")
-            session = museai_action_session(result)
-            if session:
-                self.chat_request = ("follow", session, museai_item_title(self.view, item))
-                self.EndModal(wx.ID_OK)
-            elif self.view == "suggestions" or (
-                self.view == "schedules" and item.get("execution_target") == "main"
-            ):
-                self.chat_request = ("main", "", museai_item_title(self.view, item))
-                self.EndModal(wx.ID_OK)
-            else:
-                self._refresh()
-        except ValueError as exc:
-            announce(f"Could not confirm the action: {exc} Check its status before trying again.")
+
+        if self.view == "suggestions":
+            if self.goal is None:
+                return
+            goal = self.goal
+            self._start_action(
+                "Accepting suggestion…",
+                lambda: museai_goal_decide(_museai_id(goal, "goal_id", "id"), item, "accepted"),
+                lambda result: self._run_finished(result, item),
+            )
+        elif self.view == "schedules":
+            self._start_action(
+                "Running schedule…",
+                lambda: museai_run_schedule(item),
+                lambda result: self._run_finished(result, item),
+            )
+        elif self.view == "ideas":
+            self._start_action(
+                "Loading idea…",
+                lambda: museai_read_item(self.view, item),
+                self._choose_idea_run,
+            )
+        else:
+            self._start_action(
+                "Running action…",
+                lambda: museai_run_idea(item, None),
+                lambda result: self._run_finished(result, item),
+            )
+
+    def _choose_idea_run(self, value: object) -> None:
+        from museai_backend import museai_run_idea, museai_item_title
+
+        item = cast(dict, value)
+        choices = [
+            part
+            for part in item.get("items", [])
+            if isinstance(part, dict) and part.get("selectable") is not False and part.get("id")
+        ]
+        parts = None
+        if choices:
+            with wx.SingleChoiceDialog(
+                self,
+                "What would you like to run?",
+                museai_item_title(self.view, item),
+                ["Whole idea", "Choose parts…"],
+            ) as dialog:
+                if dialog.ShowModal() != wx.ID_OK:
+                    return
+                selected = dialog.GetSelection()
+            if selected == 1:
+                labels = [
+                    str((part.get("content") or {}).get("title") or part["id"]) for part in choices
+                ]
+                with wx.MultiChoiceDialog(
+                    self, "Choose parts to run:", "Run selected parts", labels
+                ) as dialog:
+                    dialog.SetSelections(
+                        [i for i, part in enumerate(choices) if part.get("isSelected") is not False]
+                    )
+                    if dialog.ShowModal() != wx.ID_OK:
+                        return
+                    parts = [str(choices[i]["id"]) for i in dialog.GetSelections()]
+        self._start_action(
+            "Running idea…",
+            lambda: museai_run_idea(item, parts),
+            lambda result: self._run_finished(result, item),
+        )
+
+    def _run_finished(self, result: object, item: dict) -> None:
+        from museai_backend import museai_action_session, museai_item_title
+
+        announce("muse.ai accepted the action.")
+        session = museai_action_session(cast(dict, result))
+        if session:
+            self.chat_request = ("follow", session, museai_item_title(self.view, item))
+            self.EndModal(wx.ID_OK)
+        elif self.view == "suggestions" or (
+            self.view == "schedules" and item.get("execution_target") == "main"
+        ):
+            self.chat_request = ("main", "", museai_item_title(self.view, item))
+            self.EndModal(wx.ID_OK)
+        else:
+            self._refresh()
 
     def _history(self) -> None:
         from museai_backend import museai_schedule_history, museai_item_title
@@ -4681,15 +4891,15 @@ class MuseAiDialog(wx.Dialog):
         item = self._selected()
         if item is None:
             return
-        try:
-            with wx.BusyCursor():
-                text = museai_schedule_history(item)
+
+        def show(value: object) -> None:
+            text = str(value)
             with ReadView(
                 self, text, f"Run history: {museai_item_title(self.view, item)}"
             ) as dialog:
                 dialog.ShowModal()
-        except ValueError as exc:
-            announce(f"Could not read run history: {exc}")
+
+        self._start_action("Loading run history…", lambda: museai_schedule_history(item), show)
 
     def _suggestions(self) -> None:
         item = self._selected()
@@ -4710,18 +4920,21 @@ class MuseAiDialog(wx.Dialog):
         item = self._selected()
         if item is None or self.goal is None or item.get("status") != "suggested":
             return
-        try:
-            with wx.BusyCursor():
-                museai_goal_decide(_museai_id(self.goal, "goal_id", "id"), item, "dismissed")
+        goal = self.goal
+
+        def dismissed(_value: object) -> None:
             self._refresh()
             announce("Suggestion dismissed.")
-        except ValueError as exc:
-            announce(f"Could not dismiss the suggestion: {exc}")
+
+        self._start_action(
+            "Dismissing suggestion…",
+            lambda: museai_goal_decide(_museai_id(goal, "goal_id", "id"), item, "dismissed"),
+            dismissed,
+        )
 
     def _manage_goal(self) -> None:
         from museai_backend import (
             museai_goal_status,
-            museai_goal_edit,
             museai_goal_delete,
             museai_read_item,
         )
@@ -4741,50 +4954,65 @@ class MuseAiDialog(wx.Dialog):
             if dialog.ShowModal() != wx.ID_OK:
                 return
             choice = dialog.GetSelection()
-        try:
-            if choice == 0:
-                with wx.BusyCursor():
-                    item = museai_read_item("goals", item)
-                with wx.TextEntryDialog(
-                    self, "Goal title:", "Edit goal", str(item.get("title", ""))
-                ) as dialog:
-                    if dialog.ShowModal() != wx.ID_OK:
-                        return
-                    title = dialog.GetValue()
-                with wx.TextEntryDialog(
-                    self,
-                    "Goal description:",
-                    "Edit goal",
-                    str(item.get("description", "")),
-                    style=wx.OK | wx.CANCEL | wx.TE_MULTILINE,
-                ) as dialog:
-                    if dialog.ShowModal() != wx.ID_OK:
-                        return
-                    description = dialog.GetValue()
-                with wx.BusyCursor():
-                    museai_goal_edit(item, title, description)
-            elif choice == 5:
-                if (
-                    wx.MessageBox(
-                        f"Delete the goal {item.get('title', '')}?",
-                        "Delete goal",
-                        wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION,
-                        self,
-                    )
-                    != wx.YES
-                ):
-                    return
-                with wx.BusyCursor():
-                    museai_goal_delete(item)
-            else:
-                with wx.BusyCursor():
-                    museai_goal_status(
-                        item, ["", "active", "paused", "completed", "retired"][choice]
-                    )
-            self._refresh()
-            announce("Goal updated.")
-        except ValueError as exc:
-            announce(f"Could not update the goal: {exc}")
+        if choice == 0:
+            self._start_action(
+                "Loading goal…",
+                lambda: museai_read_item("goals", item),
+                self._edit_goal,
+            )
+            return
+        if (
+            choice == 5
+            and wx.MessageBox(
+                f"Delete the goal {item.get('title', '')}?",
+                "Delete goal",
+                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION,
+                self,
+            )
+            != wx.YES
+        ):
+            return
+        if choice == 5:
+            self._start_action(
+                "Updating goal…", lambda: museai_goal_delete(item), self._goal_updated
+            )
+        else:
+            status = ["", "active", "paused", "completed", "retired"][choice]
+            self._start_action(
+                "Updating goal…",
+                lambda: museai_goal_status(item, status),
+                self._goal_updated,
+            )
+
+    def _edit_goal(self, value: object) -> None:
+        from museai_backend import museai_goal_edit
+
+        item = cast(dict, value)
+        with wx.TextEntryDialog(
+            self, "Goal title:", "Edit goal", str(item.get("title", ""))
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            title = dialog.GetValue()
+        with wx.TextEntryDialog(
+            self,
+            "Goal description:",
+            "Edit goal",
+            str(item.get("description", "")),
+            style=wx.OK | wx.CANCEL | wx.TE_MULTILINE,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            description = dialog.GetValue()
+        self._start_action(
+            "Saving goal…",
+            lambda: museai_goal_edit(item, title, description),
+            self._goal_updated,
+        )
+
+    def _goal_updated(self, _value: object) -> None:
+        self._refresh()
+        announce("Goal updated.")
 
     def _read(self) -> None:
         from museai_backend import museai_read_item, museai_item_text, museai_item_title
@@ -4792,15 +5020,17 @@ class MuseAiDialog(wx.Dialog):
         selected = self.list.GetSelection()
         if not 0 <= selected < len(self.items):
             return
-        try:
-            with wx.BusyCursor():
-                item = museai_read_item(self.view, self.items[selected])
+
+        source = self.items[selected]
+
+        def show(value: object) -> None:
+            item = cast(dict, value)
             with ReadView(
                 self, museai_item_text(self.view, item), museai_item_title(self.view, item)
             ) as dialog:
                 dialog.ShowModal()
-        except ValueError as exc:
-            announce(f"Could not read this item: {exc}")
+
+        self._start_action("Reading item…", lambda: museai_read_item(self.view, source), show)
 
     def _decide(self) -> None:
         from museai_backend import museai_decide, museai_item_text, museai_allowed_decisions
@@ -4834,13 +5064,16 @@ class MuseAiDialog(wx.Dialog):
         if decision not in allowed:
             announce("This approval needs a different choice in the muse.ai app.")
             return
-        try:
-            with wx.BusyCursor():
-                museai_decide(str(item["approval_id"]), decision, reason)
+
+        def decided(_value: object) -> None:
             announce("Allowed once" if decision == "allow_once" else "Denied")
             self._refresh()
-        except ValueError as exc:
-            announce(f"Could not send the approval decision: {exc}")
+
+        self._start_action(
+            "Sending approval decision…",
+            lambda: museai_decide(str(item["approval_id"]), decision, reason),
+            decided,
+        )
 
     def _on_key(self, event: wx.KeyEvent) -> None:
         if (
@@ -5146,17 +5379,6 @@ class ModelDialog(wx.Dialog):
         )
 
 
-def _question_choice(option: QuestionOption) -> str:
-    """One answer as a single line, because that is how it is read aloud.
-
-    A colon rather than a dash: the descriptions have dashes of their own, and
-    two kinds of dash in one line is a sentence nobody can follow by ear.
-    """
-    if not option.description:
-        return option.label
-    return f"{option.label}: {option.description}"
-
-
 # What a subagent the list shows is doing: its name, where it stands, and its
 # log. Kept to the newest lines, because a subagent that runs for an hour can
 # say far more than anyone will read back.
@@ -5322,285 +5544,6 @@ class PermissionDialog(wx.Dialog):
         return self._reason.GetValue().strip()
 
 
-class QuestionDialog(wx.Dialog):
-    """A backend's own mid-run question, asked as a dialog.
-
-    Every backend BlindPilot drives can stop a turn to ask something, and all
-    four ask the same shape of question: some text, a short list of answers,
-    and permission to type one of your own instead. That last one is the
-    "Other" every one of their tools tells the model not to write itself, and
-    it is offered here as the final choice in each list: picking it opens a
-    text box underneath.
-
-    A question that takes one answer gets radio buttons, one that takes several
-    gets a checked list. A question with no choices at all (a secret, a sudo
-    password, a clarification) is only the text box, shown from the start. Esc
-    leaves the question unanswered, which each adapter reports to its backend
-    in whatever way that backend understands.
-    """
-
-    OTHER = "Other: type your own answer"
-
-    def __init__(
-        self,
-        parent: wx.Window,
-        backend: str,
-        questions: Sequence[Question],
-        *,
-        ended_turn: bool = False,
-    ):
-        plural = "s" if len(questions) > 1 else ""
-        super().__init__(
-            parent,
-            title=f"{backend_label(backend)} question{plural}",
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
-        )
-        self._questions = list(questions)
-        self._pickers: list[Optional[wx.Window]] = []
-        self._texts: list[wx.TextCtrl] = []
-        self._labels: list[wx.StaticText] = []
-        self._previews: list[Optional[wx.TextCtrl]] = []
-        pad = self.FromDIP(PAD_DIALOG)
-        # The typed answer sits one dialog margin further in than its
-        # question, so it reads as belonging to it.
-        indent = 2 * pad
-        wrap = self.FromDIP(560)
-
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        # A question asked through the backend's own tool holds the turn open
-        # while this dialog is up; one only written into the answer does not,
-        # because the turn is already over. Saying "paused" for the second
-        # would be telling somebody their turn is still running when it has
-        # finished, and the answer they type starts a new one.
-        opening = (
-            f"{backend_label(backend)} ended this turn by asking"
-            if ended_turn
-            else f"{backend_label(backend)} has paused this turn to ask"
-        )
-        intro = wx.StaticText(
-            self,
-            label=(f"{opening} {'you these questions' if plural else 'you a question'}."),
-        )
-        sizer.Add(intro, 0, wx.ALL, pad)
-
-        for index, question in enumerate(questions):
-            title = question.question
-            if len(questions) > 1:
-                title = f"{index + 1} of {len(questions)}. {title}"
-            if question.header:
-                title = f"{title} ({question.header})"
-            choices = [_question_choice(option) for option in question.options]
-            if question.allow_custom:
-                choices.append(self.OTHER)
-            picker: Optional[wx.Window]
-            if not question.options:
-                # Nothing to pick from, so no picker. A RadioBox with "Other" as
-                # its only entry starts selected and can never change, so the
-                # event that shows the text box never fired and the question
-                # could not be answered.
-                picker = None
-                heading = wx.StaticText(self, label=title)
-                heading.Wrap(wrap)
-                sizer.Add(heading, 0, wx.LEFT | wx.RIGHT | wx.TOP, pad)
-            elif question.multi_select:
-                # A checked list is what a screen reader reads as "check box,
-                # not checked" per line, which is what "pick as many as you
-                # like" has to sound like.
-                heading = wx.StaticText(self, label=title)
-                heading.Wrap(wrap)
-                picker = wx.CheckListBox(self, choices=choices)
-                picker.SetName(question.question)
-                picker.Bind(wx.EVT_CHECKLISTBOX, self._on_choice)
-                sizer.Add(heading, 0, wx.LEFT | wx.RIGHT | wx.TOP, pad)
-                sizer.Add(picker, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
-            else:
-                picker = wx.RadioBox(
-                    self,
-                    label=title,
-                    choices=choices,
-                    majorDimension=1,
-                    style=wx.RA_SPECIFY_COLS,
-                )
-                picker.SetName(question.question)
-                picker.Bind(wx.EVT_RADIOBOX, self._on_choice)
-                sizer.Add(picker, 0, wx.EXPAND | wx.ALL, pad)
-            self._pickers.append(picker)
-
-            label = wx.StaticText(
-                self, label="&Your answer:" if picker is None else "&Your own answer:"
-            )
-            # Codex can mark a question whose answer is a secret. Masking it is
-            # the whole of what that means here: the transcript already keeps
-            # the fact of an answer rather than the answer.
-            style = wx.TE_PROCESS_ENTER | (wx.TE_PASSWORD if question.secret else 0)
-            entry = wx.TextCtrl(self, style=style)
-            entry.SetName(f"Your answer to {question.question}")
-            # TE_PROCESS_ENTER takes Enter away from the dialog's default
-            # button and gives it to the box, so without this the key does
-            # nothing whatsoever in the one place a turn waits to be let go.
-            entry.Bind(wx.EVT_TEXT_ENTER, self._on_text_enter)
-            label.Show(picker is None)
-            entry.Show(picker is None)
-            sizer.Add(label, 0, wx.LEFT | wx.RIGHT, indent)
-            sizer.Add(entry, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, indent)
-            self._labels.append(label)
-            self._texts.append(entry)
-
-            # Some options carry a preview: what picking that one would
-            # mean, as a mock-up or a sketch. It follows the choice, so it
-            # sits under the answer box and is refilled as the choice moves.
-            preview: Optional[wx.TextCtrl] = None
-            if any(option.preview for option in question.options):
-                sizer.Add(
-                    wx.StaticText(self, label="Pre&view:"),
-                    0,
-                    wx.LEFT | wx.RIGHT,
-                    indent,
-                )
-                preview = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
-                preview.SetName(f"Preview for {question.question}")
-                preview.SetMinSize(self.FromDIP(wx.Size(520, 110)))
-                sizer.Add(preview, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, indent)
-            self._previews.append(preview)
-
-        self._update_previews()
-        buttons = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
-        ok = self.FindWindowById(wx.ID_OK)
-        if isinstance(ok, wx.Button):
-            ok.SetLabel("&Send answer" + plural)
-        cancel = self.FindWindowById(wx.ID_CANCEL)
-        if isinstance(cancel, wx.Button):
-            cancel.SetLabel("&Do not answer")
-        if buttons is not None:
-            sizer.Add(buttons, 0, wx.EXPAND | wx.ALL, pad)
-        self.SetSizerAndFit(sizer)
-
-        self.Bind(wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
-        if self._pickers:
-            self._picker_or_text(0).SetFocus()
-        self.CentreOnParent()
-
-    def _picker_or_text(self, index: int) -> wx.Window:
-        """The control that answers question `index`: its picker, or its box."""
-        picker = self._pickers[index]
-        return self._texts[index] if picker is None else picker
-
-    def _picked(self, index: int) -> list[int]:
-        """Which entries are chosen for one question, by position in its list.
-
-        By position rather than by what the line says: the line is
-        "label — description", and a label with a dash of its own in it would
-        not survive being taken apart again.
-        """
-        picker = self._pickers[index]
-        if isinstance(picker, wx.CheckListBox):
-            return list(picker.GetCheckedItems())
-        if isinstance(picker, wx.RadioBox) and picker.GetSelection() != wx.NOT_FOUND:
-            return [picker.GetSelection()]
-        return []
-
-    def _wants_custom(self, index: int) -> bool:
-        """Whether a typed answer is wanted: "Other" is chosen, or there is no list."""
-        question = self._questions[index]
-        if not question.options:
-            return True
-        return question.allow_custom and len(question.options) in self._picked(index)
-
-    def _preview_text(self, index: int) -> str:
-        """The preview of the option currently picked for one question.
-
-        The first picked option that has one wins; "Other" and a question
-        with nothing picked have none, and the box reads empty rather than
-        keeping the last option's preview under a different choice.
-        """
-        question = self._questions[index]
-        for picked in self._picked(index):
-            if picked < len(question.options) and question.options[picked].preview:
-                return question.options[picked].preview
-        return ""
-
-    def _update_previews(self) -> None:
-        for index, preview in enumerate(self._previews):
-            if preview is not None:
-                preview.ChangeValue(self._preview_text(index))
-                preview.SetInsertionPoint(0)
-
-    def _on_choice(self, event: wx.CommandEvent) -> None:
-        """Show the text box as soon as "Other" is chosen, and say so."""
-        event.Skip()
-        self._update_previews()
-        changed = False
-        for index in range(len(self._questions)):
-            wanted = self._wants_custom(index)
-            if wanted == self._texts[index].IsShown():
-                continue
-            self._labels[index].Show(wanted)
-            self._texts[index].Show(wanted)
-            changed = True
-        if not changed:
-            return
-        self.Layout()
-        self.Fit()
-        for index in range(len(self._questions)):
-            if self._texts[index].IsShown() and not self._texts[index].GetValue():
-                announce("Your own answer, edit text. Tab to it to type an answer.")
-                break
-
-    def _on_key(self, event: wx.KeyEvent) -> None:
-        if event.GetKeyCode() == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CANCEL)
-            return
-        event.Skip()
-
-    def _answered(self) -> bool:
-        """Whether every question has an answer, saying what is missing if not.
-
-        Focus lands on the question that is short, so the next keystroke goes
-        somewhere useful rather than leaving the person to find it.
-        """
-        for index, question in enumerate(self._questions):
-            if self._wants_custom(index) and not self._texts[index].GetValue().strip():
-                announce("Error: type your own answer, or pick one of the choices")
-                self._texts[index].SetFocus()
-                return False
-            if not self._chosen(index):
-                announce(f"Error: {question.question} has no answer yet")
-                self._picker_or_text(index).SetFocus()
-                return False
-        return True
-
-    def _on_ok(self, event: wx.CommandEvent) -> None:
-        """Refuse a half-filled answer rather than send the backend a blank."""
-        if self._answered():
-            event.Skip()
-
-    def _on_text_enter(self, _event: wx.CommandEvent) -> None:
-        """Enter in the answer box sends it, the way it does in the prompt."""
-        if self._answered():
-            self.EndModal(wx.ID_OK)
-
-    def _chosen(self, index: int) -> list[str]:
-        """The answers picked for one question, with "Other" resolved to text."""
-        question = self._questions[index]
-        answers: list[str] = []
-        positions = self._picked(index) if question.options else [0]
-        for position in positions:
-            if position < len(question.options):
-                # The backend wants its own label back, not the line the
-                # dialog drew from it.
-                answers.append(question.options[position].label)
-                continue
-            typed = self._texts[index].GetValue().strip()
-            if typed:
-                answers.append(typed)
-        return answers
-
-    def answers(self) -> list[list[str]]:
-        """One list of answers per question, in the order they were asked."""
-        return [self._chosen(index) for index in range(len(self._questions))]
-
-
 class ConnectDialog(wx.Dialog):
     """/connect — sign opencode in to a provider, or sign it out of one.
 
@@ -5662,7 +5605,7 @@ class ConnectDialog(wx.Dialog):
 
         def work() -> None:
             providers, connected, error = opencode_providers()
-            wx.CallAfter(self._show, providers, connected, error)
+            _call_after_alive(self._show, providers, connected, error)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -5795,7 +5738,7 @@ class ConnectDialog(wx.Dialog):
 
         def work() -> None:
             methods = opencode_auth_methods(provider_id)
-            wx.CallAfter(self._choose_method, provider_id, name, methods)
+            _call_after_alive(self._choose_method, provider_id, name, methods)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -5834,7 +5777,7 @@ class ConnectDialog(wx.Dialog):
 
         def work() -> None:
             error = opencode_connect_api_key(provider_id, key, answers)
-            wx.CallAfter(self._finished, name, error, "connected")
+            _call_after_alive(self._finished, name, error, "connected")
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -5847,7 +5790,7 @@ class ConnectDialog(wx.Dialog):
 
         def work() -> None:
             authorization, error = opencode_oauth_start(provider_id, index, answers)
-            wx.CallAfter(self._opened, provider_id, name, index, authorization, error)
+            _call_after_alive(self._opened, provider_id, name, index, authorization, error)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -5895,7 +5838,7 @@ class ConnectDialog(wx.Dialog):
 
         def work() -> None:
             failure = opencode_oauth_finish(provider_id, index, code)
-            wx.CallAfter(self._finished, name, failure, "connected")
+            _call_after_alive(self._finished, name, failure, "connected")
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -5924,7 +5867,7 @@ class ConnectDialog(wx.Dialog):
 
         def work() -> None:
             error = opencode_disconnect(provider_id)
-            wx.CallAfter(self._finished, name, error, "disconnected")
+            _call_after_alive(self._finished, name, error, "disconnected")
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -6073,6 +6016,9 @@ class NewSessionDialog(wx.Dialog):
         self.title_text = ""
         self.worktree_box: Optional[wx.CheckBox] = None
         self.branch_box: Optional[wx.TextCtrl] = None
+        self._github_serial = 0
+        self._github_cancel = threading.Event()
+        self._github_cancel.set()
 
         rows = wx.BoxSizer(wx.VERTICAL)
 
@@ -6134,7 +6080,13 @@ class NewSessionDialog(wx.Dialog):
             folder_row.Add(browse_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(PAD))
             github_btn = wx.Button(self, label="From Git&Hub…")
             github_btn.Bind(wx.EVT_BUTTON, lambda _e: self._from_github())
+            self.github_btn = github_btn
             folder_row.Add(github_btn, 0, wx.ALIGN_CENTER_VERTICAL)
+            self.github_status = wx.StaticText(self, label="")
+            self.github_status.Hide()
+            self.github_cancel = wx.Button(self, label="&Cancel GitHub operation")
+            self.github_cancel.Bind(wx.EVT_BUTTON, lambda _e: self._cancel_github())
+            self.github_cancel.Hide()
             worktree_box = wx.CheckBox(self, label="Work in a new git &worktree")
             branch_label = wx.StaticText(self, label="B&ranch for the worktree:")
             branch_box = wx.TextCtrl(self, value="")
@@ -6155,6 +6107,8 @@ class NewSessionDialog(wx.Dialog):
         else:
             rows.Add(folder_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, pad)
             rows.Add(folder_row, 0, wx.EXPAND | wx.ALL, pad)
+            rows.Add(self.github_status, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, pad)
+            rows.Add(self.github_cancel, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, pad)
             rows.Add(worktree_box, 0, wx.LEFT | wx.RIGHT, pad)
             rows.Add(branch_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, pad)
             rows.Add(branch_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, pad)
@@ -6170,7 +6124,9 @@ class NewSessionDialog(wx.Dialog):
         # Validate before the dialog closes, so a bad path can be corrected
         # in place instead of failing after the session is created.
         self.Bind(wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
+        self.Bind(wx.EVT_BUTTON, self._on_cancel_dialog, id=wx.ID_CANCEL)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        self.Bind(wx.EVT_CLOSE, self._on_close)
         self.initial_focus().SetFocus()
         self.CentreOnParent()
 
@@ -6203,23 +6159,127 @@ class NewSessionDialog(wx.Dialog):
         announce(f"Folder set to {path}")
 
     def _from_github(self) -> None:
-        """Pick one of your GitHub repositories, cloning it into the projects folder."""
-        typed_choice = "Type a repository name (owner/name)…"
-        try:
-            listed = subprocess.run(
+        """List repositories without holding up the New Session dialog."""
+        serial, cancelled = self._start_github("Loading GitHub repositories...")
+
+        def work() -> None:
+            listed, error = self._run_github(
                 ["gh", "repo", "list", "--limit", "300", "--json", "nameWithOwner",
-                 "--jq", ".[].nameWithOwner"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=60, **no_window_kwargs(),
+                 "--jq", ".[].nameWithOwner"], 60, cancelled,
             )  # fmt: skip
+            _call_after_alive(self._github_listed, serial, listed, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _run_github(
+        self, command: list[str], timeout: int, cancelled: threading.Event
+    ) -> tuple[Optional[subprocess.CompletedProcess[str]], str]:
+        if cancelled.is_set():
+            return None, ""
+        try:
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace",
+                start_new_session=os.name != "nt", **no_window_kwargs(),
+            )  # fmt: skip
+            deadline = time.monotonic() + timeout
+            while True:
+                if cancelled.is_set():
+                    self._terminate_github_process(process)
+                    return None, ""
+                try:
+                    remaining = max(0.01, deadline - time.monotonic())
+                    stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                    return subprocess.CompletedProcess(
+                        command, process.returncode, stdout, stderr
+                    ), ""
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        self._terminate_github_process(process)
+                        return None, f"GitHub CLI timed out after {timeout} seconds."
+        except FileNotFoundError:
+            return None, "The GitHub CLI (gh) is not installed. Install it and sign in first."
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, str(exc)
+
+    @staticmethod
+    def _terminate_github_process(process: subprocess.Popen[str]) -> None:
+        # gh starts git as a child; stopping only gh can leave a clone running.
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=10, **no_window_kwargs(),
+                )  # fmt: skip
+            else:
+                os.killpg(process.pid, signal.SIGKILL)  # type: ignore[attr-defined]
         except (OSError, subprocess.SubprocessError):
-            self._reject("The GitHub CLI (gh) is not installed. Install it and sign in first.")
+            pass
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
+            process.wait(timeout=5)
+
+    def _start_github(self, message: str) -> tuple[int, threading.Event]:
+        self._github_serial += 1
+        self._github_cancel = threading.Event()
+        self.github_btn.Disable()
+        self.github_status.SetLabel(message)
+        self.github_status.Show()
+        self.github_cancel.Show()
+        self.Layout()
+        self.Fit()
+        self.github_cancel.SetFocus()
+        announce(message)
+        return self._github_serial, self._github_cancel
+
+    def _finish_github(self) -> None:
+        self.github_status.Hide()
+        self.github_cancel.Hide()
+        self.github_btn.Enable()
+        self.Layout()
+
+    def _stop_github(self) -> bool:
+        if self._github_cancel.is_set():
+            return False
+        self._github_serial += 1
+        self._github_cancel.set()
+        return True
+
+    def _cancel_github(self) -> None:
+        if self._stop_github():
+            self._finish_github()
+            self.github_btn.SetFocus()
+            announce("GitHub operation cancelled")
+
+    def _github_listed(
+        self, serial: int, listed: Optional[subprocess.CompletedProcess[str]], error: str
+    ) -> None:
+        if not self or serial != self._github_serial:
+            return
+        self._finish_github()
+        if error:
+            if error.startswith("The GitHub CLI (gh) is not installed"):
+                self._reject(error)
+            else:
+                self._reject(f"The GitHub CLI could not list your repositories:\n{error}")
+            return
+        if listed is None:
             return
         if listed.returncode:
             detail = (listed.stderr or "").strip() or "gh repo list failed."
             self._reject(f"The GitHub CLI could not list your repositories:\n{detail}")
             return
         repos = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+        typed_choice = "Type a repository name (owner/name)\u2026"
+        self.github_btn.SetFocus()
         with wx.SingleChoiceDialog(
             self, "Repository:", "From GitHub", [typed_choice, *repos]
         ) as pick:
@@ -6235,24 +6295,50 @@ class NewSessionDialog(wx.Dialog):
             self._reject(f"Not a repository name: {repo}")
             return
         target = os.path.join(os.path.expanduser(self._default_dir), repo.split("/")[1])
-        if not os.path.isdir(target):
-            announce(f"Cloning {repo}")
-            try:
-                with wx.BusyInfo(f"Cloning {repo}…", self):
-                    cloned = subprocess.run(
-                        ["gh", "repo", "clone", repo, target],
-                        capture_output=True, text=True, encoding="utf-8", errors="replace",
-                        timeout=900, **no_window_kwargs(),
-                    )  # fmt: skip
-            except (OSError, subprocess.SubprocessError) as exc:
-                self._reject(f"Cloning {repo} failed: {exc}")
-                return
-            if cloned.returncode:
-                self._reject(f"Cloning {repo} failed:\n{(cloned.stderr or '').strip()}")
-                return
+        if os.path.isdir(target):
+            self._github_cloned(serial, repo, target, None, "")
+            return
+        serial, cancelled = self._start_github(f"Cloning {repo}...")
+
+        def work() -> None:
+            cloned, error = self._run_github(["gh", "repo", "clone", repo, target], 900, cancelled)
+            _call_after_alive(self._github_cloned, serial, repo, target, cloned, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _github_cloned(
+        self,
+        serial: int,
+        repo: str,
+        target: str,
+        cloned: Optional[subprocess.CompletedProcess[str]],
+        error: str,
+    ) -> None:
+        if not self or serial != self._github_serial:
+            return
+        if cloned is not None or error:
+            self._finish_github()
+        if error:
+            self._reject(f"Cloning {repo} failed: {error}")
+            return
+        if cloned is not None and cloned.returncode:
+            self._reject(f"Cloning {repo} failed:\n{(cloned.stderr or '').strip()}")
+            return
         self.folder_box.SetValue(target)
         self.folder_box.SetFocus()
         announce(f"Folder set to {target}")
+
+    def _on_cancel_dialog(self, event: wx.CommandEvent) -> None:
+        self._stop_github()
+        event.Skip()
+
+    def _on_close(self, event: wx.CloseEvent) -> None:
+        self._stop_github()
+        event.Skip()
+
+    def Destroy(self) -> bool:  # type: ignore[override]
+        self._stop_github()
+        return super().Destroy()
 
     def _on_ok(self, event: wx.CommandEvent) -> None:
         self.title_text = self.name_box.GetValue().strip()
@@ -6287,6 +6373,7 @@ class NewSessionDialog(wx.Dialog):
                 self._reject(why)
                 return
         self.path = path
+        self._stop_github()
         event.Skip()
 
     def _reject(self, message: str) -> None:
@@ -6299,6 +6386,7 @@ class NewSessionDialog(wx.Dialog):
 
     def _on_key(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self._stop_github()
             self.EndModal(wx.ID_CANCEL)
             return
         event.Skip()
@@ -7004,6 +7092,10 @@ class HermesSessionsDialog(wx.Dialog):
         self.entry: Optional[dict] = None
         self.webview_entry: Optional[HistoryEntry] = None
         self.attaching = False
+        self._load_task = TaskSlot(_call_after_alive)
+        self._loading = False
+        self._load_error = ""
+        self._announce_refresh = False
 
         filter_label = wx.StaticText(self, label="&Filter:")
         self.filter_box = wx.TextCtrl(self)
@@ -7052,34 +7144,75 @@ class HermesSessionsDialog(wx.Dialog):
         self.CentreOnParent()
 
     # ----- Loading and filtering -----
-    def _reload(self) -> bool:
-        """Ask Hermes for its conversations. Blocking, so it says it is working.
+    def _reload(self, refreshing: bool = False) -> None:
+        """Ask Hermes for its conversations on a worker.
 
-        False when Hermes could not be asked; the reason has been spoken.
+        The dialog opens and stays usable while Hermes is asked. The answer is
+        filled in when it arrives, unless a newer request or a closed dialog
+        has made it stale.
         """
-        self.summary.SetLabel("Asking Hermes for its conversations…")
-        with wx.BusyCursor():
-            remote_url = REMOTE_HERMES.url()
-            entries, live, error = hermes_session_catalog(
-                self._cwd,
+        self._loading = True
+        self._load_error = ""
+        self._announce_refresh = refreshing
+        self._entries = []
+        self._shown = []
+        self.list_box.Set([])
+        self._set_open_enabled(False)
+        asking = "Asking Hermes for its conversations…"
+        self.summary.SetLabel(asking)
+        announce(asking)
+
+        # Read the remote settings here, on the GUI thread, so the worker only
+        # does the talking to Hermes.
+        remote_url = REMOTE_HERMES.url()
+        remote_token = REMOTE_HERMES.key if remote_url else ""
+        remote_credential = REMOTE_HERMES.credential if remote_url else "token"
+        remote_username = REMOTE_HERMES.username if remote_url else ""
+        cwd = self._cwd
+
+        def work() -> object:
+            return hermes_session_catalog(
+                cwd,
                 remote_url=remote_url,
-                remote_token=REMOTE_HERMES.key if remote_url else "",
-                remote_credential=REMOTE_HERMES.credential if remote_url else "token",
-                remote_username=REMOTE_HERMES.username if remote_url else "",
+                remote_token=remote_token,
+                remote_credential=remote_credential,
+                remote_username=remote_username,
             )
-        self._entries = entries
-        self._live = live
+
+        def loaded(result: object, error: str) -> None:
+            if error:
+                self._sessions_loaded([], set(), error)
+                return
+            entries, live, catalog_error = cast(tuple[list[dict], set[str], str], result)
+            self._sessions_loaded(entries, live, catalog_error)
+
+        self._load_task.start(work, loaded)
+
+    def _sessions_loaded(self, entries: list[dict], live: set[str], error: str) -> None:
+        """Fill the list with the current worker result."""
+        if not self:
+            return
+        self._loading = False
+        self._load_error = error
+        refreshing = self._announce_refresh
+        self._announce_refresh = False
         if error:
             # The reason is spoken, not logged: a blind user cannot glance at a
             # console to find out why the list is empty.
-            self.summary.SetLabel(error)
-            announce(f"Error: {error}")
-            self.list_box.Set([])
-            self._shown = []
+            self._entries = []
+            self._live = set()
+            self._refresh()
             self._set_open_enabled(False)
-            return False
+            announce(f"Error: {error}")
+            return
+        self._entries = entries
+        self._live = live
         self._refresh()
-        return True
+        announce("Refreshed" if refreshing else self.summary.GetLabel())
+
+    def Destroy(self) -> bool:  # type: ignore[override]
+        self._load_task.close()
+        return super().Destroy()
 
     def _is_live(self, entry: dict) -> bool:
         return str(entry.get("id") or "") in self._live
@@ -7104,7 +7237,11 @@ class HermesSessionsDialog(wx.Dialog):
             self.list_box.SetSelection(0)
         count = len(self._shown)
         running = sum(1 for entry in self._shown if self._is_live(entry))
-        if not self._entries:
+        if self._loading:
+            message = "Asking Hermes for its conversations…"
+        elif self._load_error:
+            message = self._load_error
+        elif not self._entries:
             message = "Hermes reported no conversations"
         else:
             message = "1 conversation" if count == 1 else f"{count} conversations"
@@ -7114,7 +7251,7 @@ class HermesSessionsDialog(wx.Dialog):
         self._set_open_enabled(bool(self._shown))
 
     def _set_open_enabled(self, enabled: bool) -> None:
-        button = self.FindWindowById(wx.ID_OK)
+        button = wx.FindWindowById(wx.ID_OK, self)
         if button is not None:
             button.Enable(enabled)
 
@@ -7161,8 +7298,7 @@ class HermesSessionsDialog(wx.Dialog):
             self._accept()
             return
         if key == wx.WXK_F5:
-            if self._reload():
-                announce("Refreshed")
+            self._reload(refreshing=True)
             return
         if key == wx.WXK_DOWN and self.filter_box.HasFocus() and self._shown:
             self.list_box.SetFocus()
@@ -7226,6 +7362,22 @@ class SlashCommandDialog(wx.Dialog):
 
     def GetSelection(self) -> int:
         return self.list_box.GetSelection()
+
+    def SetLabels(self, labels: List[str]) -> None:
+        """Replace the list while it is open, keeping the same row selected."""
+        rows = self.list_box.GetRows()
+        index = self.list_box.GetSelection()
+        selected = rows[index].label if 0 <= index < len(rows) else ""
+        self.list_box.Set(labels)
+        rows = self.list_box.GetRows()
+        if not rows:
+            return
+        current = [row.label for row in rows]
+        if selected in current:
+            index = current.index(selected)
+        else:
+            index = self.list_box.GetSelection()
+        self.list_box.SetSelection(min(max(index, 0), len(rows) - 1))
 
     def _accept(self) -> None:
         self.EndModal(wx.ID_OK)
@@ -7479,8 +7631,10 @@ class SessionPanel(wx.Panel):
         # so a question left in the answer as well is not asked over again.
         self._structured_question_asked = False
         # A question the finished turn only wrote into its answer, waiting to
-        # be put to the person once the turn is fully done.
-        self._question_in_the_answer = ""
+        # be put to the person once the turn is fully done: a string when the
+        # question was read out of prose, or the block's own Question list,
+        # which is what carries options for the dialog to offer.
+        self._question_in_the_answer: str | Sequence[Question] = ""
 
         self._turns: List[Turn] = []
         # The agent's own task list, as its task tools last left it.
@@ -7531,8 +7685,17 @@ class SessionPanel(wx.Panel):
         # drains, if the conversation it belongs to is still the one here.
         self._late_turn_waiting: Optional[int] = None
         self._session_id: Optional[str] = None
+        # The Account this tab's Codex conversation is bound to, or UNBOUND
+        # until its first turn takes one from the saved choice. A conversation
+        # stays on the Account it began on, so choosing another one affects the
+        # next conversation rather than moving the thread somebody is in.
+        self._codex_plan_account: object = UNBOUND
         self._backend = normalize_backend(self._get_backend())
         self._session_backend = self._backend
+        self._museai_main_required = False
+        self._museai_main_loading = False
+        self._museai_main_serial = 0
+        self._museai_pending_send = False
         # The conversation's name as the tab shows it; the frame keeps it.
         self.tab_title = self._session_title
         self._worker: Optional[AgentWorker] = None
@@ -7562,6 +7725,18 @@ class SessionPanel(wx.Panel):
         # What the CLI last reported it is using, for when we pass no flag.
         self._cli_model = ""
         self._cli_effort = ""
+        # The model catalog this tab last read, and whether a background
+        # refresh is already out. The list is kept so a change can be told from
+        # the same list being read again; None means nothing has been read yet,
+        # which is not a change worth announcing.
+        self._known_models: Optional[List[str]] = None
+        self._model_refresh_running = False
+        # Which changed-file discovery is current for this tab, so a worker
+        # that finishes after a refresh cannot fill the list it replaced.
+        self._changed_files_serial = 0
+        # The same for slash-command probes, and the dialog they fill.
+        self._slash_commands_serial = 0
+        self._slash_dialog: Optional[SlashCommandDialog] = None
         self._attachments: List[str] = []
 
         self.backend_status = wx.StaticText(
@@ -7891,11 +8066,16 @@ class SessionPanel(wx.Panel):
     def set_backend(self, backend: str) -> None:
         """Point this tab's next turn at ``backend``; other tabs keep theirs."""
         self._backend = normalize_backend(backend)
+        if self._backend != BACKEND_MUSEAI:
+            self._museai_main_serial += 1
+            self._museai_main_loading = False
+            self._museai_main_required = False
+            self._museai_pending_send = False
         self.backend_changed()
         if self._backend == BACKEND_MUSEAI:
             self.open_museai_main()
 
-    def open_museai_main(self) -> None:
+    def open_museai_main(self, resume_pending: bool = False) -> None:
         """Selecting muse.ai resumes its main conversation, without sending anything."""
         from museai_backend import museai_config_path, museai_main_session_id
 
@@ -7903,18 +8083,58 @@ class SessionPanel(wx.Panel):
         if self._run_in_progress():
             self._announce("Stop the running task before opening muse.ai's main chat")
             return
-        with wx.BusyCursor():
-            session = museai_main_session_id() if museai_config_path().is_file() else None
-            if not session:
-                self._announce(
-                    "Error: muse.ai's main chat could not be opened. Check your sign-in."
-                )
-                return
-            entry = HistoryEntry(BACKEND_MUSEAI, session, "Main chat", "", 0, folder="muse.ai")
-            turns = load_turns(entry)
+        if self._museai_main_loading:
+            self._museai_pending_send |= resume_pending
+            return
+        self._museai_main_loading = True
+        self._museai_pending_send = resume_pending
+        self._museai_main_serial += 1
+        serial = self._museai_main_serial
+        self._announce("Loading muse.ai's main chat")
+
+        def work() -> None:
+            try:
+                session = museai_main_session_id() if museai_config_path().is_file() else None
+                if not session:
+                    raise ValueError("Check your sign-in.")
+                entry = HistoryEntry(BACKEND_MUSEAI, session, "Main chat", "", 0, folder="muse.ai")
+                turns = load_turns(entry)
+                error = ""
+            except Exception as exc:
+                entry, turns, error = None, [], str(exc)
+            _call_after_alive(self._museai_main_loaded, serial, entry, turns, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _museai_main_loaded(self, serial: int, entry, turns, error: str) -> None:
+        if not self or serial != self._museai_main_serial:
+            return
+        self._museai_main_loading = False
+        if self._backend != BACKEND_MUSEAI:
+            return
+        if error or entry is None:
+            self._museai_pending_send = False
+            self._announce(
+                f"Error: muse.ai's main chat could not be opened. {error or 'Check your sign-in.'}"
+            )
+            return
+        resume_pending = self._museai_pending_send
+        self._museai_pending_send = False
         self._museai_main_required = False
         self.model = self.effort = self._cli_model = self._cli_effort = ""
         self.restore_history(entry, turns)
+        if resume_pending:
+            _call_after_alive(self._send_museai_pending, self._museai_main_serial)
+
+    def _send_museai_pending(self, serial: int) -> None:
+        if (
+            not self
+            or serial != self._museai_main_serial
+            or self._backend != BACKEND_MUSEAI
+            or self._session_backend != BACKEND_MUSEAI
+        ):
+            return
+        self.send_now()
 
     def show_backend_in_prompt(self, shown: bool) -> None:
         """Name the prompt after the backend it sends to, while tabs are mixed.
@@ -7999,6 +8219,76 @@ class SessionPanel(wx.Panel):
             return
         self._cli_model = options.current_model
         self._cli_effort = options.current_effort
+        # The list this read produced is what the picker now offers, so it
+        # becomes the baseline a later background read compares against. A read
+        # that came back with nothing -- a probe that failed, or a backend with
+        # no list of its own -- is not a baseline: it would make the next good
+        # read look like the whole list had just been added.
+        if options.models:
+            self._known_models = list(options.models)
+
+    def refresh_models_in_background(self) -> None:
+        """Re-read this tab's model catalog, off the UI thread, and say changes.
+
+        A window left open used to read the catalog only when /model opened or
+        the backend changed, so a model retired upstream stayed on offer until
+        somebody happened to open the picker. The window's timer calls this
+        instead, and it is a no-op while the cached answer is inside the
+        interval the person set, so running it often costs nothing. Zero means
+        the refresh is off altogether.
+        """
+        if self._model_refresh_running:
+            return
+        minutes = SETTINGS.model_refresh_minutes
+        if minutes <= 0:
+            return
+        backend = self.selected_backend()
+        if cached_model_options(self.cwd, minutes * 60, backend) is not None:
+            return
+        self._model_refresh_running = True
+
+        def work() -> None:
+            options = probe_model_options(self.cwd, backend=backend)
+            wx.CallAfter(self._models_refreshed, backend, options)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _models_refreshed(self, backend: str, options: "ModelOptions") -> None:
+        if not self:  # tab closed while the probe was running
+            return
+        self._model_refresh_running = False
+        provider = normalize_backend(backend)
+        if provider != self.selected_backend():
+            return
+        # Read before the new list is recorded, so this compare is against what
+        # the tab last showed rather than the list that has just replaced it.
+        previous = self._known_models
+        self._remember_cli_model(options, provider)
+        self._announce_model_changes(provider, options.models, previous)
+
+    def _announce_model_changes(
+        self, backend: str, models: List[str], previous: Optional[List[str]]
+    ) -> None:
+        """Say which models the backend gained or lost since this tab last read.
+
+        Nothing is said the first time. That list is what /model already offers,
+        not news, and a listener should not be greeted by it on the first tick.
+        After that any difference is real -- a model retired upstream, or one
+        the service has just added -- and a listener, who cannot see the list
+        change, has no other way to learn it. A read that came back with
+        nothing is not a change; it is a probe that failed.
+        """
+        if previous is None or not models or previous == models:
+            return
+        added = [model for model in models if model not in previous]
+        gone = [model for model in previous if model not in models]
+        said = []
+        if gone:
+            said.append(f"no longer offers {', '.join(gone)}")
+        if added:
+            said.append(f"now offers {', '.join(added)}")
+        if said:
+            self._on_activity("notice", f"{backend_label(backend)} {'; '.join(said)}.")
 
     def open_model_dialog(self, force_refresh: bool = False) -> None:
         """/model — offer the two combo boxes, filled from the CLI.
@@ -8503,12 +8793,64 @@ class SessionPanel(wx.Panel):
         """What differs from the last commit here (Model menu, Ctrl+Shift+D).
 
         Enter on a file reads its changes a line at a time; closing that comes
-        back to the list on the same file.
+        back to the list on the same file. Git discovery runs on a worker so
+        the shortcut returns at once, and a folder's last listing is reused
+        until Refresh asks Git again.
         """
-        try:
-            found = changed_files(self.cwd) if self.cwd else None
-        except (OSError, subprocess.SubprocessError) as exc:
-            self._announce(f"Error: git could not be run: {exc}")
+        cwd = self.cwd
+        if not cwd:
+            self._announce("Open a session tab first, so changes have a folder to look in.")
+            return
+        cached = cached_changed_files(cwd)
+        if cached is not None:
+            serial = self._changed_files_serial + 1
+            self._changed_files_serial = serial
+            self._show_changed_files(serial, cwd, cached)
+            return
+        self._load_changed_files(cwd)
+
+    def _load_changed_files(self, cwd: str) -> None:
+        """Ask Git for this folder's changes on a worker."""
+        serial = self._changed_files_serial + 1
+        self._changed_files_serial = serial
+        self._announce("Looking for changed files since the last commit…")
+
+        def work() -> None:
+            found = None
+            error = ""
+            try:
+                found = changed_files(cwd)
+            except (OSError, subprocess.SubprocessError) as exc:
+                error = str(exc)
+            _call_after_alive(self._changed_files_loaded, serial, cwd, found, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _changed_files_loaded(
+        self,
+        serial: int,
+        cwd: str,
+        found: Optional[tuple[str, list[tuple[str, str, bool]]]],
+        error: str,
+    ) -> None:
+        """Fill the list from a worker, unless its tab or request is no longer current."""
+        if not self or serial != self._changed_files_serial or cwd != self.cwd:
+            return
+        if error:
+            self._announce(f"Error: git could not be run: {error}")
+            return
+        remember_changed_files(cwd, found)
+        self._show_changed_files(serial, cwd, found)
+
+    def _show_changed_files(
+        self,
+        serial: int,
+        cwd: str,
+        found: Optional[tuple[str, list[tuple[str, str, bool]]]],
+        chosen: int = 0,
+    ) -> None:
+        """Offer a folder's listing, with an explicit Refresh in place."""
+        if not self or serial != self._changed_files_serial:
             return
         if found is None:
             self._announce("This folder is not in a git repository, so changes cannot be listed")
@@ -8518,34 +8860,81 @@ class SessionPanel(wx.Panel):
             self._announce("No changed files since the last commit")
             return
         n = len(files)
-        chosen = 0
+        refresh = "Refresh the list (asks Git)"
         while True:
             with wx.SingleChoiceDialog(
                 self,
                 f"{n} changed {'file' if n == 1 else 'files'} since the last commit. "
-                "Enter reads a file's changes.",
+                "Enter reads a file's changes; Refresh re-checks Git.",
                 "Changed Files",
-                [label for _path, label, _new in files],
+                [label for _path, label, _new in files] + [refresh],
             ) as dlg:
                 dlg.SetSelection(chosen)
                 if dlg.ShowModal() != wx.ID_OK:
                     break
                 chosen = dlg.GetSelection()
+            if chosen == n:
+                forget_changed_files(cwd)
+                self._load_changed_files(cwd)
+                return
             path, _label, new = files[chosen]
-            if new:
-                try:
+            self._load_changed_file(serial, cwd, root, path, new, files, chosen)
+            return
+        self.prompt.SetFocus()
+
+    def _load_changed_file(
+        self,
+        serial: int,
+        cwd: str,
+        root: str,
+        path: str,
+        new: bool,
+        files: list[tuple[str, str, bool]],
+        chosen: int,
+    ) -> None:
+        """Read a selected file or its Git diff without blocking the event loop."""
+
+        def work() -> None:
+            try:
+                if new:
                     with open(os.path.join(root, path), encoding="utf-8", errors="replace") as fh:
                         text = "New file:\n" + fh.read()
-                except OSError as exc:
-                    text = f"Could not read the file: {exc}"
-            else:
-                text = readable_diff(_git(root, "diff", "HEAD", "--", path).stdout)
-            view = ReadView(self, text or "No changes to show", path, monospace=True)
-            try:
-                view.ShowModal()
-            finally:
-                view.Destroy()
-        self.prompt.SetFocus()
+                else:
+                    text = readable_diff(_git(root, "diff", "HEAD", "--", path).stdout)
+            except (OSError, subprocess.SubprocessError) as exc:
+                text = f"Could not read the file: {exc}"
+            _call_after_alive(
+                self._changed_file_loaded,
+                serial,
+                cwd,
+                root,
+                path,
+                files,
+                chosen,
+                text,
+            )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _changed_file_loaded(
+        self,
+        serial: int,
+        cwd: str,
+        root: str,
+        path: str,
+        files: list[tuple[str, str, bool]],
+        chosen: int,
+        text: str,
+    ) -> None:
+        """Show a completed read only if its tab and request are still current."""
+        if not self or serial != self._changed_files_serial or cwd != self.cwd:
+            return
+        view = ReadView(self, text or "No changes to show", path, monospace=True)
+        try:
+            view.ShowModal()
+        finally:
+            view.Destroy()
+        self._show_changed_files(serial, cwd, (root, files), chosen)
 
     def _show_status(self, backend: str, report: str) -> None:
         """Put the finished report on screen, once the probe has answered."""
@@ -8627,24 +9016,56 @@ class SessionPanel(wx.Panel):
                 return
             self._add_attachments(dlg.GetPaths())
 
-    def _pick_slash_command(self) -> None:
-        """Slash-command picker: choose a command to insert into the prompt."""
-        commands = _slash_commands_for_backend(self.selected_backend(), self.cwd)
-        labels = [f"{cmd}. {desc}" for cmd, desc in commands]
+    def _pick_slash_command(self, refresh: bool = False) -> None:
+        """Slash-command picker: choose a command to insert into the prompt.
+
+        The built-in list opens at once. Anything the backend has to be asked
+        for is probed on a worker and filled into the open picker; a backend
+        and folder's last answer is reused until Refresh asks again.
+        """
+        backend = self.selected_backend()
+        cwd = self.cwd
+        if refresh:
+            forget_slash_commands(backend, cwd)
+        cached = None if refresh else cached_slash_commands(backend, cwd)
+        if cached is not None:
+            self._show_slash_commands(backend, cwd, list(cached), probe=False)
+            return
+        self._announce("Looking for this backend's slash commands…")
+        commands = _static_slash_commands_for_backend(backend)
+        self._show_slash_commands(backend, cwd, commands, probe=True)
+
+    def _show_slash_commands(
+        self,
+        backend: str,
+        cwd: Optional[str],
+        commands: list[tuple[str, str]],
+        probe: bool,
+    ) -> None:
+        """Open the picker, and let a worker fill it while it is open."""
+        serial = self._slash_commands_serial + 1
+        self._slash_commands_serial = serial
+        shown = list(commands)
         dlg = SlashCommandDialog(
             self,
             "Choose a slash command. It will be placed in the prompt ready to send.",
-            labels,
+            _slash_command_labels(shown),
         )
+        self._slash_dialog = dlg
         try:
-            if dlg.ShowModal() != wx.ID_OK:
-                return
-            idx = dlg.GetSelection()
+            if probe:
+                self._load_slash_commands(serial, backend, cwd, dlg, shown)
+            chosen = dlg.GetSelection() if dlg.ShowModal() == wx.ID_OK else -1
         finally:
+            self._slash_dialog = None
             dlg.Destroy()
-        if not (0 <= idx < len(commands)):
+        if not (0 <= chosen < len(shown)):
+            if chosen == len(shown):
+                self._pick_slash_command(refresh=True)
+            else:
+                self.prompt.SetFocus()
             return
-        cmd_text = commands[idx][0]
+        cmd_text = shown[chosen][0]
         # Strip the placeholder hint (e.g. "[message]", "[model-id]") so the
         # inserted text is the raw command; user can append arguments if needed.
         cmd_text = cmd_text.split(" [")[0]
@@ -8654,6 +9075,69 @@ class SessionPanel(wx.Panel):
         self.prompt.SetInsertionPointEnd()
         self.prompt.SetFocus()
         self._announce(f"Slash command: {cmd_text}. Edit if needed, then press Enter to send.")
+
+    def _load_slash_commands(
+        self,
+        serial: int,
+        backend: str,
+        cwd: Optional[str],
+        dlg: SlashCommandDialog,
+        shown: list[tuple[str, str]],
+    ) -> None:
+        """Ask this backend for its own commands on a worker."""
+
+        def work() -> None:
+            found: list[tuple[str, str]] = []
+            error = ""
+            try:
+                if normalize_backend(backend) == BACKEND_COMMANDCODE:
+                    # The agent's list is fetched on its own worker; wait for it
+                    # here so this probe returns the complete answer to cache.
+                    from commandcode_backend import commandcode_agent_commands
+
+                    commandcode_agent_commands(cwd, wait=True)
+                found = _slash_commands_for_backend(backend, cwd)
+            except (OSError, subprocess.SubprocessError) as exc:
+                error = str(exc)
+            _call_after_alive(
+                self._slash_commands_loaded,
+                serial,
+                backend,
+                cwd,
+                dlg,
+                shown,
+                found,
+                error,
+            )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _slash_commands_loaded(
+        self,
+        serial: int,
+        backend: str,
+        cwd: Optional[str],
+        dlg: SlashCommandDialog,
+        shown: list[tuple[str, str]],
+        found: list[tuple[str, str]],
+        error: str,
+    ) -> None:
+        """Fill a completed probe, unless its tab or request is no longer current."""
+        if (
+            not self
+            or serial != self._slash_commands_serial
+            or normalize_backend(backend) != self.selected_backend()
+            or cwd != self.cwd
+        ):
+            return
+        if error:
+            self._announce(f"Error: could not read slash commands: {error}")
+            return
+        remember_slash_commands(backend, cwd, found)
+        if dlg is not getattr(self, "_slash_dialog", None):
+            return
+        shown[:] = found
+        dlg.SetLabels(_slash_command_labels(shown))
 
     def _pick_saved_prompt(self) -> None:
         """Saved Prompts: put one in the prompt at the caret, over any selection."""
@@ -9058,7 +9542,9 @@ class SessionPanel(wx.Panel):
         # waiting on this dialog, and a loop under a question is only noise.
         self._earcons.stop_progress()
         self._hide_working()
-        dlg = QuestionDialog(self, backend, questions, ended_turn=ended_turn)
+        dlg = QuestionDialog(
+            self, backend_label(backend), questions, announce=announce, ended_turn=ended_turn
+        )
         self._question_dialog = dlg
         try:
             if dlg.ShowModal() != wx.ID_OK:
@@ -9085,7 +9571,7 @@ class SessionPanel(wx.Panel):
         self._announce("Answer sent")
         return answers
 
-    def _ask_question_left_in_the_answer(self, question: str) -> None:
+    def _ask_question_left_in_the_answer(self, question: str | Sequence[Question]) -> None:
         """Put a question the turn only wrote down in front of the person.
 
         The same dialog a backend's own question tool opens, because it is the
@@ -9093,13 +9579,27 @@ class SessionPanel(wx.Panel):
         this turn has already ended, so there is nothing holding a reply — what
         is typed is sent as the next turn, which is what typing it into the
         message box would have done.
+
+        What arrives is either a block the turn wrote, which carries its own
+        questions and their options, or a bare question read out of prose,
+        which has nothing to offer but a text field.
         """
         if not self or self._run_in_progress():
             # Something was sent between the turn ending and this being posted.
             # That message is the answer now, whatever it says.
             return
-        answers = self._show_question_dialog([Question(question=question)], ended_turn=True)
-        answer = answers[0][0].strip() if answers and answers[0] else ""
+        questions = (Question(question=question),) if isinstance(question, str) else tuple(question)
+        if not questions:
+            return
+        answers = self._show_question_dialog(questions, ended_turn=True)
+        if not answers:
+            return
+        # One line per question, in the order they were asked: the order every
+        # provider that takes a list of answers here already uses.
+        said = [
+            "; ".join(part.strip() for part in (group or []) if part.strip()) for group in answers
+        ]
+        answer = "\n".join(part for part in said if part).strip()
         if not answer or not self.prompt:
             return
         # The answer goes out through the message box, which may already hold
@@ -9709,7 +10209,7 @@ class SessionPanel(wx.Panel):
 
         selected_backend = self.selected_backend()
         if selected_backend == BACKEND_MUSEAI and getattr(self, "_museai_main_required", False):
-            self.open_museai_main()
+            self.open_museai_main(resume_pending=True)
             if self._museai_main_required:
                 return
         if selected_backend != self._session_backend:
@@ -9720,6 +10220,9 @@ class SessionPanel(wx.Panel):
                 # is nothing to leave behind, and the name still applies.
                 self._session_title = ""
             self._session_id = None
+            # The next backend's conversation is a new one, and takes the
+            # Account Codex uses when it starts rather than the last one's.
+            self._forget_codex_conversation_account()
             # A held Hermes connection belongs to the conversation being left.
             self._drop_held_backends()
             self._session_backend = selected_backend
@@ -9729,6 +10232,9 @@ class SessionPanel(wx.Panel):
             self._auto_check_announced = False
             self._cli_model = ""
             self._cli_effort = ""
+            # The next backend's catalog is not comparable to the last one's,
+            # so the first read after the switch is not a change to announce.
+            self._known_models = None
             self.backend_status.SetLabel(f"Backend: {backend_label(selected_backend)}")
             self._announce(
                 f"Starting a new {backend_label(selected_backend)} conversation in this tab"
@@ -9787,6 +10293,25 @@ class SessionPanel(wx.Panel):
             extra["auto_context_tokens"] = SessionPanel._known_context(self)[0] or None
         self._launch_turn(send_text, selected_backend, extra)
 
+    def _codex_conversation_account(self) -> object:
+        """The Account this tab's Codex conversation is bound to, taking one if new.
+
+        A conversation stays on the Account it began on: choosing another one
+        in the accounts dialog affects the next conversation, not the thread
+        somebody is in the middle of. The Account is taken once, from the saved
+        choice, and remembered until this tab starts a conversation of its own
+        (see `_forget_codex_conversation_account`).
+        """
+        bound = getattr(self, "_codex_plan_account", UNBOUND)
+        if bound is UNBOUND:
+            bound = codex_plan_account()
+            self._codex_plan_account = bound
+        return bound
+
+    def _forget_codex_conversation_account(self) -> None:
+        """Let the next Codex conversation in this tab take its Account afresh."""
+        self._codex_plan_account = UNBOUND
+
     def _set_auto_route(self, note: str) -> None:
         """Say a changed Auto route after the worker's live model check."""
         if note != getattr(self, "_auto_route", ""):
@@ -9822,6 +10347,10 @@ class SessionPanel(wx.Panel):
         self._prune_subagents()
         self._subagents_outlive_turn = bool(getattr(worker_type, "subagents_outlive_turn", False))
         model, effort = SessionPanel._turn_model(self, send_text, selected_backend)
+        if selected_backend == BACKEND_CODEX:
+            # The Account this conversation began on, so its turns -- and any
+            # resume of it -- stay there however the saved choice moves.
+            extra["plan_account"] = self._codex_conversation_account()
         self._worker = worker_type(
             send_text,
             self._session_id,
@@ -10180,8 +10709,14 @@ class SessionPanel(wx.Panel):
             # queued leaves that event writing into a list with nothing in it.
             self._announce("Error: Stop the running task before starting a new conversation")
             return
+        self._museai_main_serial += 1
         self._session_id = None
+        # A new conversation takes the Account Codex uses when it starts, so a
+        # choice made since the last one reaches it.
+        self._forget_codex_conversation_account()
         self._museai_main_required = False
+        self._museai_main_loading = False
+        self._museai_pending_send = False
         self._drop_held_backends()
         # The name from the New Session dialog belonged to the conversation
         # just abandoned. Keeping it would hand that name to the NEXT
@@ -10244,6 +10779,9 @@ class SessionPanel(wx.Panel):
         Adopting the backend's own session id is what makes the next message a
         continuation of it rather than the start of something new.
         """
+        self._museai_main_serial += 1
+        self._museai_main_loading = False
+        self._museai_pending_send = False
         self._session_id = entry.session_id
         self._museai_main_required = False
         self._pending_messages = []
@@ -10481,7 +11019,7 @@ class SessionPanel(wx.Panel):
         for backend in (BACKEND_CLAUDE, BACKEND_HERMES, BACKEND_FREEBUFF):
             # A key never held is a documented no-op, so this stays correct
             # while Hermes and FreeBuff still start fresh each turn.
-            shared.drop(backend_pool.pool_key(backend, self))
+            shared.drop_async(backend_pool.pool_key(backend, self))
         # A wake-up queued by the process that just went belonged to the
         # conversation it went with. Read through getattr because this also
         # runs on half-built panels and on test stand-ins.
@@ -10742,10 +11280,16 @@ class SessionPanel(wx.Panel):
         # Kept rather than asked here: the turn is still finishing, and a modal
         # over a run that has not reported itself done would be answered into a
         # turn that cannot take it.
-        self._question_in_the_answer = question_left_in_the_answer(
+        # A block written into the reply carries real options, so the dialog
+        # can offer them to pick from; the prose reading is the fallback, and
+        # is all a backend with no question tool of its own can give.
+        asked_properly = getattr(self, "_structured_question_asked", False)
+        replaying = getattr(self, "_replaying", False)
+        block = () if (asked_properly or replaying) else questions_written_in_the_answer(text)
+        self._question_in_the_answer = block or question_left_in_the_answer(
             text,
-            asked_properly=getattr(self, "_structured_question_asked", False),
-            replaying=getattr(self, "_replaying", False),
+            asked_properly=asked_properly,
+            replaying=replaying,
         )
         # A reopened conversation completes with no text: nothing new was said,
         # the rows are the transcript that was just replayed. Announcing a
@@ -10832,6 +11376,16 @@ class SessionPanel(wx.Panel):
             # names nothing. The next message starts a fresh one, as the
             # worker has already said, rather than failing the same way again.
             self._session_id = None
+            # And a fresh one is a new conversation: it takes the Account Codex
+            # uses when it starts, not the one the lost thread was held under.
+            self._forget_codex_conversation_account()
+        if getattr(self._worker, "plan_token_failed", False) and self._session_id is None:
+            # The Account this conversation was bound to could not produce a
+            # token, and nothing has begun on it. Let the next turn take the
+            # saved choice again: deleting or signing out of that Account
+            # already put the choice back on Codex's own login, where retrying
+            # its dead id would fail the same way every time.
+            self._forget_codex_conversation_account()
         # The failure stays in the list as a row of its own. The status bar
         # line is overwritten by the next event, and a list that looks the
         # same after a failed turn as after a finished one tells a reader
@@ -11252,7 +11806,9 @@ class SessionPanel(wx.Panel):
         def read_formatted(_event: wx.CommandEvent) -> None:
             self._read_formatted(row)
 
-        menu.Bind(wx.EVT_MENU, read_formatted, formatted)
+        menu.Bind(
+            wx.EVT_MENU, _gui_work("Read response as formatted page", read_formatted), formatted
+        )
         for kind, label in (
             ("code", "Code Blocks in This Response…"),
             ("links", "Links in This Response…"),
@@ -11262,28 +11818,32 @@ class SessionPanel(wx.Panel):
             def browse_items(_event: wx.CommandEvent, chosen: str = kind) -> None:
                 self.open_items(chosen, row.response_number)
 
-            menu.Bind(wx.EVT_MENU, browse_items, item)
+            menu.Bind(wx.EVT_MENU, _gui_work(label, browse_items), item)
         if row.kind == "code":
             item = menu.Append(wx.ID_ANY, "Save code to file…")
 
             def save_code(_event: wx.CommandEvent) -> None:
                 self._action_save_code(row)
 
-            menu.Bind(wx.EVT_MENU, save_code, item)
+            menu.Bind(wx.EVT_MENU, _gui_work("Save code to file", save_code), item)
         insert_item = menu.Append(wx.ID_ANY, "Insert into prompt")
 
         def insert(_event: wx.CommandEvent) -> None:
             self._action_insert(row)
 
-        menu.Bind(wx.EVT_MENU, insert, insert_item)
+        menu.Bind(wx.EVT_MENU, _gui_work("Insert response into prompt", insert), insert_item)
         copy_item = menu.Append(wx.ID_ANY, "Copy whole response")
 
         def copy_response(_event: wx.CommandEvent) -> None:
             self._action_copy_response(row)
 
-        menu.Bind(wx.EVT_MENU, copy_response, copy_item)
+        menu.Bind(wx.EVT_MENU, _gui_work("Copy whole response", copy_response), copy_item)
         copy_all_item = menu.Append(wx.ID_ANY, "Copy whole conversation")
-        menu.Bind(wx.EVT_MENU, lambda _e: self._action_copy_conversation(), copy_all_item)
+        menu.Bind(
+            wx.EVT_MENU,
+            _gui_work("Copy whole conversation", lambda _e: self._action_copy_conversation()),
+            copy_all_item,
+        )
         return menu
 
     def _show_row_menu(self) -> None:
@@ -11941,6 +12501,7 @@ class SetupWizard(wx.Dialog):
         self._cli_check_btn = wx.Button(p, label="Check Again")
         self._cli_check_btn.Bind(wx.EVT_BUTTON, lambda _e: self._check_cli(force_update_check=True))
         self._cli_check_btn.Hide()
+        self._cli_check_pending = False
 
         # Read-only multiline field rather than a label: NVDA can review the
         # installer's output line by line, and it stays reachable by Tab.
@@ -12140,9 +12701,13 @@ class SetupWizard(wx.Dialog):
         self.Layout()
 
     def _find_selected_cli(self) -> Optional[str]:
-        if self.backend == BACKEND_CLAUDE:
+        return SetupWizard._find_selected_cli_for_backend(self.backend)
+
+    @staticmethod
+    def _find_selected_cli_for_backend(backend: str) -> Optional[str]:
+        if backend == BACKEND_CLAUDE:
             return _find_claude()
-        if self.backend == BACKEND_MUSE:
+        if backend == BACKEND_MUSE:
             # The launcher lives inside WSL on Windows, where a Windows
             # process cannot run it; asking the ordinary search would find
             # nothing and the wizard would offer an install that already
@@ -12150,16 +12715,20 @@ class SetupWizard(wx.Dialog):
             from muse_backend import muse_cli_path
 
             return muse_cli_path()
-        return find_backend_cli(self.backend)
+        return find_backend_cli(backend)
 
     def _selected_install_argv(self) -> Optional[List[str]]:
-        if self.backend == BACKEND_CLAUDE:
+        return SetupWizard._selected_install_argv_for_backend(self.backend)
+
+    @staticmethod
+    def _selected_install_argv_for_backend(backend: str) -> Optional[List[str]]:
+        if backend == BACKEND_CLAUDE:
             return _install_argv()
-        if self.backend == BACKEND_HERMES:
+        if backend == BACKEND_HERMES:
             return _hermes_install_argv()
-        if self.backend == BACKEND_MUSE:
+        if backend == BACKEND_MUSE:
             return _muse_install_argv()
-        argv = _npm_install_argv(self.backend)
+        argv = _npm_install_argv(backend)
         if argv is not None:
             return argv
         # The actual Node.js command is discovered at install time. A sentinel
@@ -12169,6 +12738,9 @@ class SetupWizard(wx.Dialog):
     # ---- navigation ----
 
     def _show_step(self, step: int) -> None:
+        if step != self._step:
+            self._update_check_generation += 1
+            self._cli_check_pending = False
         self._step = step
         self._book.SetSelection(step)
         n = len(self._STEPS)
@@ -12205,6 +12777,7 @@ class SetupWizard(wx.Dialog):
         event.Skip()
 
     def _on_wizard_close(self, event: wx.CloseEvent) -> None:
+        self._update_check_generation = getattr(self, "_update_check_generation", 0) + 1
         self._stop_login()
         event.Skip()
 
@@ -12264,16 +12837,75 @@ class SetupWizard(wx.Dialog):
 
     # ---- CLI step ----
 
-    def _check_cli(self, force_update_check: bool = False) -> None:
+    def _check_cli(
+        self,
+        force_update_check: bool = False,
+        _facts: Optional[tuple[Optional[str], bool, bool, bool]] = None,
+        _generation: Optional[int] = None,
+        _backend: Optional[str] = None,
+    ) -> None:
         if not self:
             # `_show_step` queues these, so one can land an event-loop
             # iteration after the wizard was closed.
             return
-        self._update_check_generation += 1
-        if self.backend != BACKEND_CLAUDE:
-            self._check_npm_backend_cli(force_update_check)
+        if _facts is None:
+            if self._cli_check_pending:
+                return
+            self._update_check_generation += 1
+            generation = self._update_check_generation
+            backend = self.backend
+            self._cli_check_pending = True
+            self._cli_status.SetLabel(f"Checking for {backend_label(backend)} CLI…")
+            self._cli_detail.SetLabel("This may take several seconds.")
+            self._next_btn.Enable(False)
+            self._pages[1].Layout()
+            self.Layout()
+            announce(self._cli_status.GetLabel())
+
+            def work() -> None:
+                try:
+                    path = SetupWizard._find_selected_cli_for_backend(backend)
+                    on_path = _is_on_persistent_path(Path(path).parent) if path else False
+                    install_available = (
+                        SetupWizard._selected_install_argv_for_backend(backend) is not None
+                    )
+                    npm_available = _find_npm() is not None
+                    facts = path, on_path, install_available, npm_available
+                    error = ""
+                except Exception as exc:  # noqa: BLE001 - report check failures accessibly
+                    facts = None
+                    error = str(exc) or type(exc).__name__
+                _call_after_alive(
+                    self._on_cli_check_finished,
+                    generation,
+                    backend,
+                    force_update_check,
+                    facts,
+                    error,
+                )
+
+            threading.Thread(target=work, daemon=True).start()
             return
-        self._backend_path = self._find_selected_cli()
+
+        if (
+            _generation != self._update_check_generation
+            or _backend != self.backend
+            or self._step != 1
+        ):
+            return
+        self._cli_check_pending = False
+        self._backend_path, on_path, install_available, npm_available = _facts
+        self._cli_check_btn.Enable(True)
+        if self.backend != BACKEND_CLAUDE:
+            self._check_npm_backend_cli(
+                force_update_check,
+                on_path=on_path,
+                install_available=install_available,
+                npm_available=npm_available,
+                backend_path=self._backend_path,
+                prepared=True,
+            )
+            return
         windows = platform.system() == "Windows"
         # Spoken after the status line. The labels are long, and what the user
         # needs to hear is which button to Tab to.
@@ -12281,7 +12913,6 @@ class SetupWizard(wx.Dialog):
 
         if self._backend_path:
             folder = Path(self._backend_path).parent
-            on_path = _is_on_persistent_path(folder)
             self._cli_status.SetLabel("Claude Code found:")
             if on_path:
                 self._cli_detail.SetLabel(self._backend_path)
@@ -12305,7 +12936,7 @@ class SetupWizard(wx.Dialog):
             self._cli_check_btn.Hide()
             self._next_btn.Enable(True)
             self._check_backend_updates(self._backend_path, force_update_check)
-        elif _install_argv() is not None:
+        elif install_available:
             flavour = "native Windows version" if windows else "native version"
             self._cli_status.SetLabel("Claude Code is not installed on this computer.")
             self._cli_detail.SetLabel(
@@ -12344,14 +12975,55 @@ class SetupWizard(wx.Dialog):
         self.Layout()
         announce(" ".join(filter(None, (self._cli_status.GetLabel(), hint))))
 
-    def _check_npm_backend_cli(self, force_update_check: bool = False) -> None:
+    def _on_cli_check_finished(
+        self,
+        generation: int,
+        backend: str,
+        force_update_check: bool,
+        facts: Optional[tuple[Optional[str], bool, bool, bool]],
+        error: str,
+    ) -> None:
+        if (
+            not self
+            or self._step != 1
+            or generation != self._update_check_generation
+            or backend != self.backend
+        ):
+            return
+        self._cli_check_pending = False
+        if error or facts is None:
+            label = backend_label(backend)
+            self._cli_status.SetLabel(f"Could not check for {label} CLI.")
+            self._cli_detail.SetLabel(
+                f"{error or 'Try Check Again.'}\n\nChoose Check Again to retry."
+            )
+            self._cli_check_btn.Show()
+            self._cli_check_btn.Enable(True)
+            self._next_btn.Enable(False)
+            self._pages[1].Layout()
+            self.Layout()
+            announce(self._cli_status.GetLabel() + " " + self._cli_detail.GetLabel())
+            return
+        self._check_cli(force_update_check, facts, generation, backend)
+
+    def _check_npm_backend_cli(
+        self,
+        force_update_check: bool = False,
+        *,
+        on_path: Optional[bool] = None,
+        install_available: Optional[bool] = None,
+        npm_available: Optional[bool] = None,
+        backend_path: Optional[str] = None,
+        prepared: bool = False,
+    ) -> None:
         """Check a non-Claude backend without showing Claude-specific guidance."""
         info = BACKENDS[self.backend]
-        self._backend_path = self._find_selected_cli()
+        self._backend_path = backend_path if prepared else self._find_selected_cli()
         hint = ""
         if self._backend_path:
             folder = Path(self._backend_path).parent
-            on_path = _is_on_persistent_path(folder)
+            if on_path is None:
+                on_path = _is_on_persistent_path(folder)
             self._cli_status.SetLabel(f"{info.label} found:")
             self._cli_detail.SetLabel(self._backend_path)
             self._cli_install_btn.Hide()
@@ -12374,8 +13046,12 @@ class SetupWizard(wx.Dialog):
             # own. Offer it when the prerequisites are here, and name what is
             # missing when they are not. npm is never named, since saying it
             # would send the user after the wrong thing.
-            argv = self._selected_install_argv()
-            if argv is not None:
+            has_installer = (
+                install_available
+                if install_available is not None
+                else self._selected_install_argv() is not None
+            )
+            if has_installer:
                 self._cli_status.SetLabel(f"{info.label} is not installed.")
                 self._cli_detail.SetLabel(
                     f"Choose Install {info.label} to run its official installer. No "
@@ -12403,9 +13079,14 @@ class SetupWizard(wx.Dialog):
                 self._cli_check_btn.Show()
                 self._next_btn.Enable(False)
                 hint = "Tab to Check Again once it is installed."
-        elif self._selected_install_argv() is not None:
+        elif (
+            install_available
+            if install_available is not None
+            else self._selected_install_argv() is not None
+        ):
             self._cli_status.SetLabel(f"{info.label} is not installed.")
-            if _find_npm() is None:
+            has_npm = npm_available if npm_available is not None else _find_npm() is not None
+            if not has_npm:
                 self._cli_detail.SetLabel(
                     f"Choose Install {info.label}. BlindPilot will first install the "
                     "latest Node.js LTS and npm for your user account, without administrator "
@@ -13325,6 +14006,34 @@ class PreferencesDialog(wx.Dialog):
         )
 
         root.Add(wx.StaticLine(panel), 0, wx.EXPAND | wx.ALL, pad)
+        refresh_row = wx.BoxSizer(wx.HORIZONTAL)
+        refresh_row.Add(
+            wx.StaticText(
+                panel,
+                label=(
+                    "Re-read the model list every N minutes "
+                    f"({MODEL_REFRESH_MINUTES_MIN} turns it off):"
+                ),
+            ),
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            self.FromDIP(PAD),
+        )
+        self._model_refresh = wx.SpinCtrl(
+            panel,
+            min=MODEL_REFRESH_MINUTES_MIN,
+            max=MODEL_REFRESH_MINUTES_MAX,
+            initial=SETTINGS.model_refresh_minutes,
+        )
+        self._model_refresh.SetToolTip(
+            "BlindPilot re-reads each open tab's model list so a model retired "
+            "upstream drops out of the picker, and says so. Each read starts the "
+            "provider's command-line tool; 0 stops the background read."
+        )
+        refresh_row.Add(self._model_refresh, 0)
+        root.Add(refresh_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, pad)
+
+        root.Add(wx.StaticLine(panel), 0, wx.EXPAND | wx.ALL, pad)
         self._updates = wx.CheckBox(panel, label="Check for updates at startup")
         self._updates.SetValue(bool(_load_config().get("check_for_updates_at_startup", True)))
         root.Add(self._updates, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, pad)
@@ -13405,6 +14114,10 @@ class PreferencesDialog(wx.Dialog):
         return _valid_cue_seconds(self._interval.GetValue())
 
     @property
+    def model_refresh_minutes(self) -> int:
+        return _valid_model_refresh_minutes(self._model_refresh.GetValue())
+
+    @property
     def check_updates_startup(self) -> bool:
         return self._updates.GetValue()
 
@@ -13451,10 +14164,26 @@ class MainFrame(wx.Frame):
         self._agent_menu_items: list[wx.MenuItem] = []
         # The two sessions in an agent conversation, while one runs.
         self._relay: Optional[dict] = None
+        self._find_all_serial = 0
+        self._find_all_progress: Optional[wx.ProgressDialog] = None
+        self._find_all_cancel: Optional[threading.Event] = None
+        self._history_open_serial = 0
+        self._history_open_cancel: Optional[threading.Event] = None
+        self._history_open_progress: Optional[wx.Dialog] = None
+        self._history_open_message: Optional[wx.StaticText] = None
+        self._history_open_cancel_button: Optional[wx.Button] = None
+        self._agent_files_cache: dict[str, list[AgentFiles]] = {}
+        self._agent_files_serial = 0
         # Session links handed over by a second copy; watched only once the
         # window is shown (`watch_for_links`), never in a window built and torn
         # down by a check, where a timer firing mid-teardown crashed macOS.
         self._links_timer: Optional[wx.Timer] = None
+        # Re-reads every tab's model catalog on a timer, so a model retired
+        # upstream drops out of the picker on a window left open. Watched only
+        # once the window is shown, like the links timer above.
+        self._model_timer: Optional[wx.Timer] = None
+        self._desktop_shortcut_serial = 0
+        self._desktop_shortcut_running = False
         menubar = wx.MenuBar()
         menubar.Append(self._build_file_menu(), "&File")
         menubar.Append(self._build_conversation_menu(), "&Conversation")
@@ -13588,7 +14317,7 @@ class MainFrame(wx.Frame):
             def set_order(_event: wx.CommandEvent, selected: str = order) -> None:
                 self._set_chat_model_order(selected)
 
-            self.Bind(wx.EVT_MENU, set_order, item)
+            self.Bind(wx.EVT_MENU, _gui_work("Chat model order", set_order), item)
         chat_menu.AppendSubMenu(
             model_order_menu,
             "Model &order",
@@ -13673,67 +14402,121 @@ class MainFrame(wx.Frame):
         self._refresh_connect_item()
         self._refresh_hermes_sessions_item()
         self._refresh_mode_items()
-        self.Bind(wx.EVT_MENU, lambda _e: self._toggle_live_rows(), self._rows_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._toggle_speak_live(), self._speak_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._toggle_show_thinking(), self._thinking_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._toggle_sounds(), self._sounds_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._toggle_text_view(), self._text_view_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._choose_progress_cue(CUE_LOOP), self._cue_loop_item)
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._choose_progress_cue(CUE_PERIODIC),
+            _gui_work("Show live rows", lambda _e: self._toggle_live_rows()),
+            self._rows_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Speak live rows", lambda _e: self._toggle_speak_live()),
+            self._speak_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Show thinking", lambda _e: self._toggle_show_thinking()),
+            self._thinking_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Toggle sounds", lambda _e: self._toggle_sounds()),
+            self._sounds_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Toggle text view", lambda _e: self._toggle_text_view()),
+            self._text_view_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Progress cue: loop", lambda _e: self._choose_progress_cue(CUE_LOOP)),
+            self._cue_loop_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work(
+                "Progress cue: periodic",
+                lambda _e: self._choose_progress_cue(CUE_PERIODIC),
+            ),
             self._cue_periodic_item,
         )
-        self.Bind(wx.EVT_MENU, lambda _e: self._choose_progress_cue(CUE_OFF), self._cue_off_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._configure_cue_interval(), cue_interval_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._configure_remote_hermes(), remote_hermes_item)
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._use_silent_until_response_mode(),
+            _gui_work("Progress cue: off", lambda _e: self._choose_progress_cue(CUE_OFF)),
+            self._cue_off_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Configure cue interval", lambda _e: self._configure_cue_interval()),
+            cue_interval_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Configure remote Hermes", lambda _e: self._configure_remote_hermes()),
+            remote_hermes_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work(
+                "Use silent until response",
+                lambda _e: self._use_silent_until_response_mode(),
+            ),
             silent_response_item,
         )
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._show_chat_accounts(),
+            _gui_work("Show Chat accounts", lambda _e: self._show_chat_accounts()),
             self._chat_accounts_item,
         )
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._show_chat_profiles(),
+            _gui_work("Show Chat profiles", lambda _e: self._show_chat_profiles()),
             self._chat_profiles_item,
         )
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._show_chat_conversations(),
+            _gui_work("Show Chat conversations", lambda _e: self._show_chat_conversations()),
             self._chat_conversations_item,
         )
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._refresh_chat_models(),
+            _gui_work("Refresh Chat models", lambda _e: self._refresh_chat_models()),
             self._chat_refresh_item,
         )
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._set_chat_history_view("list"),
+            _gui_work("Chat history list view", lambda _e: self._set_chat_history_view("list")),
             self._chat_history_list_item,
         )
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._set_chat_history_view("text"),
+            _gui_work("Chat history text view", lambda _e: self._set_chat_history_view("text")),
             self._chat_history_text_item,
         )
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._show_chat_diagnostics(),
+            _gui_work("Show Chat diagnostics", lambda _e: self._show_chat_diagnostics()),
             self._chat_diagnostics_item,
         )
-        self.Bind(wx.EVT_MENU, lambda _e: self._show_preferences(), preferences_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._show_about(), about_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._open_log_folder(), logs_item)
-        self.Bind(wx.EVT_MENU, lambda _e: self._show_update_dialog(), update_item)
         self.Bind(
             wx.EVT_MENU,
-            lambda _e: self._toggle_automatic_updates(),
+            _gui_work("Show preferences", lambda _e: self._show_preferences()),
+            preferences_item,
+        )
+        self.Bind(wx.EVT_MENU, _gui_work("Show about", lambda _e: self._show_about()), about_item)
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Open log folder", lambda _e: self._open_log_folder()),
+            logs_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Check for updates", lambda _e: self._show_update_dialog()),
+            update_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            _gui_work("Toggle automatic updates", lambda _e: self._toggle_automatic_updates()),
             self._automatic_updates_item,
         )
 
@@ -13821,14 +14604,23 @@ class MainFrame(wx.Frame):
         id_jump_response = wx.NewIdRef()
         id_next_pane = wx.NewIdRef()
         id_prev_pane = wx.NewIdRef()
-        self.Bind(wx.EVT_MENU, lambda _e: self._cycle_pane(+1), id=id_next_pane)
-        self.Bind(wx.EVT_MENU, lambda _e: self._cycle_pane(-1), id=id_prev_pane)
-        self.Bind(wx.EVT_MENU, lambda _e: self._focus_active("prompt"), id=id_focus_prompt)
-        self.Bind(wx.EVT_MENU, lambda _e: self._cycle_tab(+1), id=id_next_tab)
-        self.Bind(wx.EVT_MENU, lambda _e: self._cycle_tab(-1), id=id_prev_tab)
-        self.Bind(wx.EVT_MENU, lambda _e: self._cycle_mode_active(), id=id_cycle_mode)
-        self.Bind(wx.EVT_MENU, lambda _e: self._attach_active(), id=id_attach)
-        self.Bind(wx.EVT_MENU, lambda _e: self._jump_to_latest_response(), id=id_jump_response)
+
+        self._bind_shortcut(id_next_pane, "F6, next pane", lambda: self._cycle_pane(+1))
+        self._bind_shortcut(id_prev_pane, "Shift+F6, previous pane", lambda: self._cycle_pane(-1))
+        self._bind_shortcut(
+            id_focus_prompt, "Ctrl+L, focus the prompt", lambda: self._focus_active("prompt")
+        )
+        self._bind_shortcut(id_next_tab, "Ctrl+Tab, next tab", lambda: self._cycle_tab(+1))
+        self._bind_shortcut(
+            id_prev_tab, "Ctrl+Shift+Tab, previous tab", lambda: self._cycle_tab(-1)
+        )
+        self._bind_shortcut(
+            id_cycle_mode, "Ctrl+Shift+M, cycle mode", lambda: self._cycle_mode_active()
+        )
+        self._bind_shortcut(id_attach, "Ctrl+Shift+A, attach files", lambda: self._attach_active())
+        self._bind_shortcut(
+            id_jump_response, "Ctrl+R, latest response", lambda: self._jump_to_latest_response()
+        )
 
         accel_entries = [
             wx.AcceleratorEntry(wx.ACCEL_CMD, ord("L"), id_focus_prompt),
@@ -13846,11 +14638,9 @@ class MainFrame(wx.Frame):
         for n in range(1, 10):
             tid = wx.NewIdRef()
             self._tab_jump_ids.append(tid)
-
-            def jump_to_tab(_event: wx.CommandEvent, idx: int = n - 1) -> None:
-                self._jump_to_tab(idx)
-
-            self.Bind(wx.EVT_MENU, jump_to_tab, id=tid)
+            self._bind_shortcut(
+                tid, f"Ctrl+{n}, jump to tab {n}", lambda n=n: self._jump_to_tab(n - 1)
+            )
             accel_entries.append(wx.AcceleratorEntry(wx.ACCEL_CMD, ord(str(n)), tid))
 
         self.SetAcceleratorTable(wx.AcceleratorTable(accel_entries))
@@ -14060,6 +14850,8 @@ class MainFrame(wx.Frame):
                 self._set_status_text(message)
                 wx.MessageBox(message, "Chat Mode", wx.OK | wx.ICON_ERROR, self)
 
+        if mode != self._app_mode:
+            self._agent_files_serial += 1
         self._app_mode = mode
         show_agent = mode == APP_MODE_AGENT
         self.tab_switcher.Show(show_agent)
@@ -14289,6 +15081,7 @@ class MainFrame(wx.Frame):
         SETTINGS.read_back_sent = dialog.read_back_sent
         SETTINGS.progress_cue = dialog.progress_cue
         SETTINGS.progress_cue_seconds = dialog.progress_interval
+        SETTINGS.model_refresh_minutes = dialog.model_refresh_minutes
         changed_appearance = dialog.appearance != SETTINGS.appearance
         SETTINGS.appearance = dialog.appearance
         changed_text_view = SETTINGS.text_view != self._text_view_item.IsChecked()
@@ -14317,6 +15110,9 @@ class MainFrame(wx.Frame):
         if changed_text_view:
             for page in self._session_panels():
                 page.apply_view_mode()
+        # The catalog timer follows the new interval at once, so a change from
+        # 15 minutes to 0, or the other way, is not left until the next start.
+        self._sync_model_timer()
 
         cfg = _load_config()
         cfg["check_for_updates_at_startup"] = dialog.check_updates_startup
@@ -14628,9 +15424,16 @@ class MainFrame(wx.Frame):
 
     # ----- Options menu -----
     def _menu_item(self, menu, label, help_text, action, item_id=wx.ID_ANY):
-        """Append one item and bind it, so neither can be added without the other."""
+        """Append one item and bind it, so neither can be added without the other.
+
+        Bound through `_gui_work`, so every menu item's chord is measured
+        against the GUI-thread budget. The label names the item in the record
+        and in the log, which is the whole point of measuring here rather than
+        one handler at a time.
+        """
         item = menu.Append(item_id, label, help_text)
-        self.Bind(wx.EVT_MENU, lambda _event: action(), item)
+        handler = _gui_work(label.replace("&", ""), action)
+        self.Bind(wx.EVT_MENU, lambda _event: handler(), item)
         return item
 
     def _agent_item(self, menu, label, help_text, action, item_id=wx.ID_ANY):
@@ -14638,6 +15441,17 @@ class MainFrame(wx.Frame):
         item = self._menu_item(menu, label, help_text, action, item_id)
         self._agent_menu_items.append(item)
         return item
+
+    def _bind_shortcut(self, bind_id, name: str, action) -> None:
+        """Bind an accelerator, measured against the GUI-thread budget.
+
+        Every chord in the table goes through here, not only the ones that are
+        slow today, so a handler that grows expensive is named in the record
+        rather than felt as a stall. A method rather than a nested function
+        because the guard has to be able to reach it.
+        """
+        handler = _gui_work(name, action)
+        self.Bind(wx.EVT_MENU, lambda _event: handler(), id=bind_id)
 
     def _build_model_menu(self) -> wx.Menu:
         """What answers you, and what it may do.
@@ -14755,23 +15569,46 @@ class MainFrame(wx.Frame):
         if not request:
             return
         kind, value, title = request
-        from museai_backend import museai_main_session_id
+        serial = getattr(self, "_museai_active_serial", 0) + 1
+        self._museai_active_serial = serial
+        self._announce_setting("Loading muse.ai conversation")
 
-        session = museai_main_session_id() if kind in ("draft", "main") else value
-        if not session:
-            announce("Could not open the muse.ai main chat. The discussion was not sent.")
+        def work() -> None:
+            try:
+                if kind in ("draft", "main"):
+                    from museai_backend import museai_main_session_id
+
+                    session = museai_main_session_id()
+                else:
+                    session = value
+                if not session:
+                    raise ValueError("Could not open the muse.ai main chat.")
+                entry = HistoryEntry(
+                    backend=BACKEND_MUSEAI,
+                    session_id=session,
+                    title=f"Discuss: {title}" if kind == "draft" else title,
+                    path="",
+                    modified=time.time(),
+                    folder="muse.ai",
+                    cwd="",
+                )
+                turns = load_turns(entry)
+                error = ""
+            except Exception as exc:
+                entry, turns, session, error = None, [], None, str(exc)
+            _call_after_alive(
+                self._museai_chat_loaded, serial, kind, value, entry, turns, session, error
+            )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _museai_chat_loaded(self, serial, kind, value, entry, turns, session, error) -> None:
+        if not self or serial != getattr(self, "_museai_active_serial", 0):
             return
-        entry = HistoryEntry(
-            backend=BACKEND_MUSEAI,
-            session_id=session,
-            title=f"Discuss: {title}" if kind == "draft" else title,
-            path="",
-            modified=time.time(),
-            folder="muse.ai",
-            cwd="",
-        )
-        with wx.BusyCursor():
-            turns = load_turns(entry)
+        if error or entry is None:
+            message = f"Error: Could not open the muse.ai conversation. {error} The discussion was not sent."
+            self._announce_setting(message)
+            return
         panel = self._add_session(self._history_cwd(), open_main_chat=False)
         panel.restore_history(entry, turns)
         self._follow_tab_backend()
@@ -15047,7 +15884,9 @@ class MainFrame(wx.Frame):
             def set_backend(_event: wx.CommandEvent, chosen: str = backend) -> None:
                 self._set_backend(chosen)
 
-            self.Bind(wx.EVT_MENU, set_backend, item)
+            self.Bind(
+                wx.EVT_MENU, _gui_work(f"Backend: {BACKEND_LABELS[backend]}", set_backend), item
+            )
         return menu
 
     def _build_permission_mode_menu(self) -> wx.Menu:
@@ -15065,7 +15904,7 @@ class MainFrame(wx.Frame):
             def set_mode(_event: wx.CommandEvent, mode: str = value) -> None:
                 self._set_mode_active(mode)
 
-            self.Bind(wx.EVT_MENU, set_mode, item)
+            self.Bind(wx.EVT_MENU, _gui_work(f"Permission mode: {label}", set_mode), item)
         return menu
 
     def _refresh_mode_items(self) -> None:
@@ -15180,9 +16019,109 @@ class MainFrame(wx.Frame):
         """
         page = self.notebook.GetCurrentPage()
         cwd = page.cwd if isinstance(page, SessionPanel) else None
-        group_at = 0
+        self._agent_files_return_focus = wx.Window.FindFocus()
+        key = os.path.normcase(os.path.abspath(cwd)) if cwd else ""
+        self._agent_files_serial += 1
+        serial = self._agent_files_serial
+        groups = self._agent_files_cache.get(key)
+        if groups is None:
+            self._load_agent_files(cwd, page, 0)
+            return
+        self._show_agent_files(cwd, page, serial, groups, 0)
+
+    def _load_agent_files(
+        self,
+        cwd: Optional[str],
+        page: Optional[wx.Window],
+        group_at: int,
+        open_group: Optional[tuple[str, str]] = None,
+        selected_key: Optional[str] = None,
+    ) -> None:
+        """Discover agent files off the GUI thread, then show the current request."""
+        self._agent_files_serial += 1
+        serial = self._agent_files_serial
+        key = os.path.normcase(os.path.abspath(cwd)) if cwd else ""
+        self._agent_files_cache.pop(key, None)
+        self._announce_setting("Looking for what agents know…")
+
+        def work() -> None:
+            try:
+                groups = agent_files(cwd)
+                error = ""
+            except Exception as exc:
+                groups, error = [], str(exc)
+            _call_after_alive(
+                self._agent_files_loaded,
+                serial,
+                cwd,
+                page,
+                group_at,
+                open_group,
+                selected_key,
+                groups,
+                error,
+            )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _agent_files_loaded(
+        self,
+        serial: int,
+        cwd: Optional[str],
+        page: Optional[wx.Window],
+        group_at: int,
+        open_group: Optional[tuple[str, str]],
+        selected_key: Optional[str],
+        groups: list[AgentFiles],
+        error: str,
+    ) -> None:
+        if (
+            not self
+            or serial != self._agent_files_serial
+            or self._app_mode != APP_MODE_AGENT
+            or self.notebook.GetCurrentPage() is not page
+        ):
+            return
+        if error:
+            self._announce_setting(f"Error: could not list what agents know: {error}")
+            self._restore_agent_files_focus(page)
+            return
+        key = os.path.normcase(os.path.abspath(cwd)) if cwd else ""
+        self._agent_files_cache[key] = groups
+        self._set_status_text("What Agents Know is ready")
+        self._show_agent_files(cwd, page, serial, groups, group_at, open_group, selected_key)
+
+    def _restore_agent_files_focus(self, page: Optional[wx.Window]) -> None:
+        focus = getattr(self, "_agent_files_return_focus", None)
+        if self.notebook.GetCurrentPage() is page and focus and focus.IsShownOnScreen():
+            focus.SetFocus()
+
+    def _show_agent_files(
+        self,
+        cwd: Optional[str],
+        page: Optional[wx.Window],
+        serial: int,
+        groups: list[AgentFiles],
+        group_at: int,
+        open_group: Optional[tuple[str, str]] = None,
+        selected_key: Optional[str] = None,
+    ) -> None:
+        if open_group:
+            selected_group_at = next(
+                (
+                    at
+                    for at, group in enumerate(groups)
+                    if (group.backend, group.kind) == open_group
+                ),
+                None,
+            )
+            if selected_group_at is not None and self._agent_files_of(
+                cwd, page, groups, selected_group_at, selected_key
+            ):
+                return
+            if selected_group_at is not None:
+                group_at = selected_group_at
         while True:
-            groups = agent_files(cwd)
             message = "What your coding agents keep about you on this computer. Enter lists one."
             agents = [
                 f"{g.backend} {g.kind.lower()} {len(g.files)}"
@@ -15195,29 +16134,44 @@ class MainFrame(wx.Frame):
                 self,
                 message,
                 "What Agents Know",
-                [f"{g.backend} {g.kind.lower()}, {len(g.files)}" for g in groups],
+                [f"{g.backend} {g.kind.lower()}, {len(g.files)}" for g in groups]
+                + ["Refresh the list"],
             ) as dlg:
-                dlg.SetSelection(min(group_at, len(groups) - 1))
+                dlg.SetSelection(min(group_at, len(groups)))
                 if dlg.ShowModal() != wx.ID_OK:
                     break
-                group_at = dlg.GetSelection()
-            self._agent_files_of(cwd, groups[group_at].backend, groups[group_at].kind)
+                chosen = dlg.GetSelection()
+            if chosen == len(groups):
+                self._agent_files_cache.pop(
+                    os.path.normcase(os.path.abspath(cwd)) if cwd else "", None
+                )
+                self._load_agent_files(cwd, page, group_at)
+                return
+            group_at = chosen
+            if self._agent_files_of(cwd, page, groups, group_at):
+                return
+        self._restore_agent_files_focus(page)
 
-    def _agent_files_of(self, cwd: Optional[str], backend: str, kind: str) -> None:
+    def _agent_files_of(
+        self,
+        cwd: Optional[str],
+        page: Optional[wx.Window],
+        groups: list[AgentFiles],
+        group_at: int,
+        selected_key: Optional[str] = None,
+    ) -> bool:
         add_labels = {
             "memory": "&Add Memory…",
             "taste": "&Add Taste…",
             "hermes": "&Add Memory…",
             "agent": "&Add Agent…",
         }
+        group = groups[group_at]
+        backend, kind = group.backend, group.kind
         title = f"{backend} {kind.lower()}"
-        file_at = 0
+        keys = [key for key, _label in group.files]
+        file_at = keys.index(selected_key) if selected_key in keys else 0
         while True:
-            group = next(
-                (g for g in agent_files(cwd) if (g.backend, g.kind) == (backend, kind)), None
-            )
-            if group is None:
-                return
             files = group.files
             labels = [label for _key, label in files]
             with AgentFileList(
@@ -15228,13 +16182,8 @@ class MainFrame(wx.Frame):
             if action == wx.ID_ADD:
                 added = self._add_entry(cwd, group)
                 if added:
-                    keys = [
-                        key
-                        for g in agent_files(cwd)
-                        if (g.backend, g.kind) == (backend, kind)
-                        for key, _label in g.files
-                    ]
-                    file_at = keys.index(added) if added in keys else file_at
+                    self._load_agent_files(cwd, page, group_at, (backend, kind), added)
+                    return True
             elif action == wx.ID_DELETE:
                 key, label = files[file_at]
                 if (
@@ -15249,6 +16198,8 @@ class MainFrame(wx.Frame):
                     try:
                         delete_entry(key, group.editable)
                         announce("Deleted")
+                        self._load_agent_files(cwd, page, group_at, (backend, kind))
+                        return True
                     except (OSError, IndexError) as exc:
                         announce(f"Error: could not delete it: {exc}")
             elif action in (wx.ID_OPEN, wx.ID_EDIT):
@@ -15258,20 +16209,30 @@ class MainFrame(wx.Frame):
                 except (OSError, IndexError) as exc:
                     announce(f"Error: could not read it: {exc}")
                     continue
+                saved = False
+
+                def save(text: str, entry_key: str = key, editable: str = group.editable) -> None:
+                    nonlocal saved
+                    save_entry(entry_key, editable, text)
+                    saved = True
+
                 view = ReadView(
                     self,
                     text,
                     path,
                     edit_path=path,
-                    on_save=functools.partial(save_entry, key, group.editable),
+                    on_save=save,
                     start_editing=action == wx.ID_EDIT,
                 )
                 try:
                     view.ShowModal()
                 finally:
                     view.Destroy()
+                if saved:
+                    self._load_agent_files(cwd, page, group_at, (backend, kind), key)
+                    return True
             else:
-                return
+                return False
 
     def _add_entry(self, cwd: Optional[str], group: AgentFiles) -> Optional[str]:
         """Ask for a new entry and save it; its key, or None."""
@@ -15489,7 +16450,7 @@ class MainFrame(wx.Frame):
             def set_narration(_event: wx.CommandEvent, chosen: str = mode) -> None:
                 self._set_narration(chosen)
 
-            self.Bind(wx.EVT_MENU, set_narration, item)
+            self.Bind(wx.EVT_MENU, _gui_work(f"Narration: {label}", set_narration), item)
         return menu
 
     def _set_narration(self, mode: str) -> None:
@@ -15516,7 +16477,7 @@ class MainFrame(wx.Frame):
             def toggle_cue(_event: wx.CommandEvent, key: str = cue) -> None:
                 self._toggle_sound_cue(key)
 
-            self.Bind(wx.EVT_MENU, toggle_cue, item)
+            self.Bind(wx.EVT_MENU, _gui_work(f"Sound cue: {label}", toggle_cue), item)
         return menu
 
     def _toggle_sound_cue(self, cue: str) -> None:
@@ -15715,14 +16676,106 @@ class MainFrame(wx.Frame):
         else:
             wx.CallAfter(announce, f"Reopening {title or session_id}")
 
-    def _resume_history(self, entry: HistoryEntry) -> Optional["SessionPanel"]:
-        """Open one past conversation in its own tab, ready to be continued."""
-        with wx.BusyCursor(), history_diagnostics() as issues:
-            turns = load_turns(entry)
-        warning = " ".join(issue.message for issue in issues)
+    def _resume_history(self, entry: HistoryEntry, on_open=None) -> None:
+        """Load one past conversation without holding the GUI callback."""
+        old_cancel = getattr(self, "_history_open_cancel", None)
+        if old_cancel is not None:
+            old_cancel.set()
+        old_progress = getattr(self, "_history_open_progress", None)
+        if old_progress is not None:
+            old_progress.Destroy()
+            self._history_open_progress = None
+        serial = getattr(self, "_history_open_serial", 0) + 1
+        self._history_open_serial = serial
+        cancel = threading.Event()
+        self._history_open_cancel = cancel
+        announce(f"Loading conversation {entry.title}")
+        wx.CallAfter(self._show_history_open_progress, serial, entry.title)
+
+        def work() -> None:
+            try:
+                turns = load_turns(entry)
+                error = ""
+            except Exception as exc:
+                turns, error = [], str(exc)
+            _call_after_alive(
+                self._history_open_loaded, serial, cancel, entry, turns, error, on_open
+            )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_history_open_progress(self, serial: int, title: str) -> None:
+        if not self or serial != self._history_open_serial or self._history_open_cancel is None:
+            return
+        progress = wx.Dialog(self, title="Open Conversation")
+        message = wx.StaticText(progress, label=f"Loading {title}")
+        message.SetName("Loading conversation")
+        cancel_button = wx.Button(progress, label="Cancel opening")
+        cancel_button.Bind(wx.EVT_BUTTON, lambda _event: self._cancel_history_open(serial))
+        self._history_open_message = message
+        self._history_open_cancel_button = cancel_button
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(message, 0, wx.ALL, progress.FromDIP(PAD_DIALOG))
+        sizer.Add(
+            cancel_button,
+            0,
+            wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM,
+            progress.FromDIP(PAD_DIALOG),
+        )
+        progress.SetSizerAndFit(sizer)
+        progress.Bind(
+            wx.EVT_CHAR_HOOK,
+            lambda event: (
+                self._cancel_history_open(serial)
+                if event.GetKeyCode() == wx.WXK_ESCAPE
+                else event.Skip()
+            ),
+        )
+
+        def close(event) -> None:
+            self._cancel_history_open(serial)
+            if self._history_open_progress is progress:
+                self._history_open_progress = None
+            event.Skip()
+
+        progress.Bind(wx.EVT_CLOSE, close)
+        self._history_open_progress = progress
+        progress.CentreOnParent()
+        progress.Show()
+
+    def _cancel_history_open(self, serial: int) -> None:
+        if not self or serial != self._history_open_serial:
+            return
+        cancel = self._history_open_cancel
+        if cancel is not None:
+            cancel.set()
+        if self._history_open_message is not None:
+            self._history_open_message.SetLabel(
+                "Cancelling; the loaded conversation will be discarded"
+            )
+        if self._history_open_cancel_button is not None:
+            self._history_open_cancel_button.Disable()
+
+    def _history_open_loaded(self, serial, cancel, entry, turns, error, on_open) -> None:
+        if not self or serial != self._history_open_serial:
+            return
+        self._history_open_cancel = None
+        progress = self._history_open_progress
+        self._history_open_progress = None
+        self._history_open_message = None
+        self._history_open_cancel_button = None
+        cancelled = cancel.is_set()
+        if progress is not None:
+            progress.Destroy()
+        if cancelled:
+            announce("Opening conversation cancelled")
+            return
+        if error:
+            announce(f"Error: Could not read {entry.title}: {error}")
+            return
         if not turns:
-            announce(warning or f"Error: {entry.title} could not be read back")
-            return None
+            announce(f"Error: {entry.title} could not be read back")
+            return
         if not entry.resumable:
             text = "\n\n".join(
                 f"{label}: {value}"
@@ -15735,7 +16788,7 @@ class MainFrame(wx.Frame):
                 dialog.ShowModal()
             finally:
                 dialog.Destroy()
-            return None
+            return
         cwd = self._history_cwd()
         if entry.cwd:
             candidate = entry.cwd
@@ -15756,15 +16809,17 @@ class MainFrame(wx.Frame):
         # The resumed tab took the conversation's own backend.
         self._follow_tab_backend()
         responses = "1 response" if len(turns) == 1 else f"{len(turns)} responses"
-        wx.CallAfter(
-            announce, f"Resumed {entry.title}, {responses}" + (f". {warning}" if warning else "")
-        )
-        return panel
+        wx.CallAfter(announce, f"Resumed {entry.title}, {responses}")
+        if on_open:
+            on_open(panel)
 
     def _find_in_all_conversations(self) -> None:
         """Search every past conversation's messages (Ctrl+Shift+S).
 
         Enter on a result reopens that conversation on the matching response.
+        Scanning up to 1,000 transcripts is far past the GUI-thread budget, so
+        the work runs on a worker and only progress and the finished list come
+        back through the event loop.
         """
         with wx.TextEntryDialog(
             self, "Find in all conversations:", "Find in All Conversations",
@@ -15774,24 +16829,98 @@ class MainFrame(wx.Frame):
                 return
             term = ask.GetValue().strip()
         self._find_all_term = term
-        entries = list_history(None, None, limit=1000)
-        results: list[tuple[ConversationItem, HistoryEntry, int]] = []
+        old_cancel = getattr(self, "_find_all_cancel", None)
+        if old_cancel is not None:
+            old_cancel.set()
+        old_progress = getattr(self, "_find_all_progress", None)
+        if old_progress is not None:
+            old_progress.Destroy()
+        serial = getattr(self, "_find_all_serial", 0) + 1
+        cancel = threading.Event()
+        self._find_all_serial = serial
+        self._find_all_cancel = cancel
         progress = wx.ProgressDialog(
-            "Find in All Conversations", f"Searching for {term}", maximum=max(1, len(entries)),
+            "Find in All Conversations", f"Searching for {term}", maximum=1000,
             parent=self, style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_AUTO_HIDE,
         )  # fmt: skip
-        try:
-            for done, entry in enumerate(entries):
-                if not progress.Update(done, f"Searching {entry.title}")[0]:
-                    break
-                for index, snippet, whole in search_turns(load_turns(entry), term):
-                    label = (
-                        f"{entry.title}, {backend_label(entry.backend)}, "
-                        f"{describe_age(entry.modified)}: {snippet}"
-                    )
-                    results.append((ConversationItem(label, whole), entry, index))
-        finally:
-            progress.Destroy()
+        self._find_all_progress = progress
+
+        def work() -> None:
+            results: list[tuple[ConversationItem, HistoryEntry, int]] = []
+            error = ""
+            try:
+                entries = list_history(None, None, limit=1000)
+                _call_after_alive(self._find_all_range, serial, progress, max(1, len(entries)))
+                rows = search_all_conversations(
+                    entries,
+                    term,
+                    on_progress=lambda done, title: _call_after_alive(
+                        self._find_all_progress_update,
+                        serial,
+                        progress,
+                        cancel,
+                        done,
+                        title,
+                    ),
+                    is_cancelled=cancel.is_set,
+                )
+                results = [
+                    (ConversationItem(label, whole), entry, index)
+                    for label, entry, index, whole in rows
+                ]
+            except Exception as exc:
+                error = f"Could not search conversations: {exc}"
+            _call_after_alive(self._find_all_loaded, serial, progress, cancel, term, results, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _find_all_range(self, serial: int, progress: wx.ProgressDialog, total: int) -> None:
+        """Give the progress bar the real transcript count once it is known."""
+        if not self or serial != getattr(self, "_find_all_serial", None):
+            return
+        if progress is getattr(self, "_find_all_progress", None):
+            progress.SetRange(total)
+
+    def _find_all_progress_update(
+        self,
+        serial: int,
+        progress: wx.ProgressDialog,
+        cancel: threading.Event,
+        done: int,
+        title: str,
+    ) -> None:
+        """Show one transcript's progress, and notice the user cancelling."""
+        if not self or serial != getattr(self, "_find_all_serial", None):
+            cancel.set()
+            return
+        if progress is not getattr(self, "_find_all_progress", None):
+            cancel.set()
+            return
+        if not progress.Update(done, f"Searching {title}")[0]:
+            cancel.set()
+
+    def _find_all_loaded(
+        self,
+        serial: int,
+        progress: wx.ProgressDialog,
+        cancel: threading.Event,
+        term: str,
+        results: list[tuple[ConversationItem, HistoryEntry, int]],
+        error: str,
+    ) -> None:
+        """Fill the result list, unless this search is no longer the current one."""
+        if not self or serial != getattr(self, "_find_all_serial", None):
+            return
+        self._find_all_progress = None
+        self._find_all_cancel = None
+        cancelled = cancel.is_set() or progress.WasCancelled()
+        progress.Destroy()
+        if error:
+            announce(f"Error: {error}")
+            return
+        if cancelled:
+            announce("Search cancelled")
+            return
         if not results:
             announce(f"No conversation mentions {term}")
             return
@@ -15819,13 +16948,14 @@ class MainFrame(wx.Frame):
         if not chosen:
             return
         entry, index = chosen[0]
-        panel = self._resume_history(entry)
-        if panel is None:
-            return
-        for position, row in enumerate(panel._displayed):
-            if row.kind == "header" and row.response_number == index + 1:
-                wx.CallAfter(panel._focus_row, position)
-                break
+
+        def focus_result(panel) -> None:
+            for position, row in enumerate(panel._displayed):
+                if row.kind == "header" and row.response_number == index + 1:
+                    wx.CallAfter(panel._focus_row, position)
+                    break
+
+        self._resume_history(entry, on_open=focus_result)
 
     def _send_to_tab_active(self) -> None:
         """Hand this tab's response to another tab (Ctrl+Shift+O)."""
@@ -16087,6 +17217,7 @@ class MainFrame(wx.Frame):
         self._follow_tab_backend()
 
     def _on_tab_changed(self, event: wx.BookCtrlEvent) -> None:
+        self._agent_files_serial += 1
         event.Skip()
         self._sync_tab_switcher()
         sel = self.notebook.GetSelection()
@@ -16249,12 +17380,31 @@ class MainFrame(wx.Frame):
             page.export_conversation()
 
     def _create_desktop_shortcut(self) -> None:
-        try:
-            link = create_desktop_shortcut()
-        except (OSError, subprocess.SubprocessError) as exc:
-            self._announce_setting(f"The desktop shortcut could not be created: {exc}")
+        if self._desktop_shortcut_running:
             return
-        self._announce_setting(f"Desktop shortcut created at {link}")
+        self._desktop_shortcut_running = True
+        self._desktop_shortcut_serial += 1
+        serial = self._desktop_shortcut_serial
+        self._announce_setting("Creating desktop shortcut…")
+
+        def work() -> None:
+            try:
+                link = create_desktop_shortcut()
+            except (OSError, subprocess.SubprocessError) as exc:
+                _call_after_alive(self._desktop_shortcut_finished, serial, None, str(exc))
+                return
+            _call_after_alive(self._desktop_shortcut_finished, serial, link, "")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _desktop_shortcut_finished(self, serial: int, link: Optional[str], error: str) -> None:
+        if not self or serial != self._desktop_shortcut_serial:
+            return
+        self._desktop_shortcut_running = False
+        if error:
+            self._announce_setting(f"The desktop shortcut could not be created: {error}")
+        elif link is not None:
+            self._announce_setting(f"Desktop shortcut created at {link}")
 
     def _stop_active(self) -> None:
         if self._app_mode == APP_MODE_CHAT and self.chat_panel is not None:
@@ -16329,17 +17479,22 @@ class MainFrame(wx.Frame):
                 announce(f"{_tab_label(panel.tab_title, panel.cwd)} is already open")
                 return
 
+        serial = getattr(self, "_linked_lookup_serial", 0) + 1
+        self._linked_lookup_serial = serial
+
         def work() -> None:
             try:
                 entries = list_history(backend, None, limit=1000)
             except Exception:
                 entries = []
             entry = next((e for e in entries if e.session_id == session_id), None)
-            _call_after_alive(self._open_linked, entry)
+            _call_after_alive(self._open_linked, serial, entry)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _open_linked(self, entry: Optional[HistoryEntry]) -> None:
+    def _open_linked(self, serial: int, entry: Optional[HistoryEntry]) -> None:
+        if not self or serial != getattr(self, "_linked_lookup_serial", 0):
+            return
         if entry is None:
             announce("The conversation that link names was not found on this computer.")
             return
@@ -16349,8 +17504,52 @@ class MainFrame(wx.Frame):
         """Check every second for session links a second copy handed over."""
         if self._links_timer is None:
             self._links_timer = wx.Timer(self)
-            self.Bind(wx.EVT_TIMER, lambda _e: self._take_links(), self._links_timer)
+            self.Bind(
+                wx.EVT_TIMER,
+                _gui_work("Timer: refresh links", lambda _e: self._take_links()),
+                self._links_timer,
+            )
             self._links_timer.Start(1000)
+
+    def watch_model_catalogs(self) -> None:
+        """Re-read every tab's model catalog on the interval Preferences sets.
+
+        Started with the window rather than at import, so a window built and
+        torn down by a startup check never arms a timer that would fire during
+        teardown.
+        """
+        self._sync_model_timer()
+
+    def _sync_model_timer(self) -> None:
+        """Arm, re-arm or disarm the catalog timer to match the setting.
+
+        One timer is kept and restarted rather than a new one made each time,
+        so no second binding is left for a timer that is no longer watched. A
+        setting of 0 stops it: the refresh is then not merely slower, it is off.
+        """
+        minutes = SETTINGS.model_refresh_minutes
+        if minutes <= 0:
+            if self._model_timer is not None:
+                self._model_timer.Stop()
+                self._model_timer = None
+            return
+        if self._model_timer is None:
+            self._model_timer = wx.Timer(self)
+            self.Bind(
+                wx.EVT_TIMER,
+                _gui_work(
+                    "Timer: refresh model catalogs", lambda _e: self._refresh_model_catalogs()
+                ),
+                self._model_timer,
+            )
+        self._model_timer.Start(minutes * 60 * 1000)
+
+    def _refresh_model_catalogs(self) -> None:
+        """Ask each open tab to re-read its catalog; a fresh one is a no-op."""
+        for page in self._session_panels():
+            refresh = getattr(page, "refresh_models_in_background", None)
+            if refresh is not None:
+                refresh()
 
     def _on_close(self, event: wx.CloseEvent) -> None:
         notebook = getattr(self, "notebook", None)
@@ -16359,28 +17558,35 @@ class MainFrame(wx.Frame):
                 page = notebook.GetPage(index)
                 if isinstance(page, ConversationWebViewPanel):
                     page.mark_closed()
+        self._agent_files_serial = getattr(self, "_agent_files_serial", 0) + 1
+        self._desktop_shortcut_serial = getattr(self, "_desktop_shortcut_serial", 0) + 1
         timer = getattr(self, "_links_timer", None)
         if timer is not None:
             timer.Stop()
             self._links_timer = None
+        timer = getattr(self, "_model_timer", None)
+        if timer is not None:
+            timer.Stop()
+            self._model_timer = None
         if self.chat_panel is not None:
             self.chat_panel.shutdown()
-        # Started together, then waited on together. One after another meant
-        # up to three seconds per tab - longer for opencode - of a window that
-        # has stopped responding and cannot say why.
+        # Forget each tab's held process before the window closes. The waits
+        # belong to the shutdown thread, after the UI has returned to wx.
         cancelling = []
         for page in self._session_panels():
             thread = page.cancel_worker(wait=False)
             if thread is not None:
                 cancelling.append(thread)
-        # Quitting does wait, unlike closing a tab: a CLI that is not killed
-        # here outlives the application that started it.
-        deadline = time.monotonic() + _CANCEL_JOIN_SECONDS
-        for thread in cancelling:
-            thread.join(timeout=max(0.0, deadline - time.monotonic()))
-        # Belt and braces over the per-tab teardown above: a shared app-server
-        # belongs to no single tab, so nothing above this stops it.
-        backend_pool.stop_all_held_processes()
+
+        def finish_shutdown() -> None:
+            deadline = time.monotonic() + _CANCEL_JOIN_SECONDS
+            for thread in cancelling:
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            # A shared app-server belongs to no single tab. This also waits
+            # for pending per-tab drops without blocking the close callback.
+            backend_pool.stop_all_held_processes()
+
+        threading.Thread(target=finish_shutdown, name="backend-shutdown").start()
         # Closing this window is meant to end the process, and wx ends the
         # event loop only when the last top-level window is destroyed. Any
         # other one left standing — a dialog parented to nothing, a window a
@@ -16604,16 +17810,6 @@ def main() -> int:
     # First, so that anything below which goes wrong leaves a trace behind.
     # The packaged build is windowed and has no stderr to fall back on.
     diagnostics.start_logging()
-    if screen_speech._SPEAKER is None and platform.system() == "Windows":
-        # Worth saying plainly: with no output, every announcement on Windows
-        # goes nowhere and the application runs in total silence while its
-        # menus still say narration is on. accessible-output2 is in
-        # requirements.txt, so this means an incomplete install. Said after
-        # logging starts, so there is somewhere for it to be said.
-        logging.getLogger("blindpilot").warning(
-            "no screen reader output is available: accessible-output2 is not "
-            "installed, so nothing will be spoken on Windows"
-        )
     # Before anything is started: nothing BlindPilot launches may inherit a
     # PATH that points back into its own install folder, or the files there
     # stay open long after BlindPilot has closed and cannot be updated.
@@ -16706,6 +17902,7 @@ def main() -> int:
     else:
         frame.Show()
         frame.watch_for_links()
+        frame.watch_model_catalogs()
         if link:
             wx.CallAfter(frame.open_session_link, link)
         frame.Raise()

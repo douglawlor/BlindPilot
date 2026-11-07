@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+import app_config
 import blindpilot_app as app
 
 # "error" joined these when failure got a cue of its own; it is the one
@@ -43,7 +44,7 @@ def earcons(monkeypatch, tmp_path):
 # ----- the setting -----
 def test_every_cue_is_on_for_a_fresh_configuration(monkeypatch):
     """Nobody who never opens the menu notices any change."""
-    monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(app_config, "_load_config", dict)
 
     settings = app._Settings()
 
@@ -53,7 +54,7 @@ def test_every_cue_is_on_for_a_fresh_configuration(monkeypatch):
 
 def test_a_configuration_written_before_this_existed_still_reads(monkeypatch):
     """0.9.0 wrote `sounds_enabled` and no per-cue key at all."""
-    monkeypatch.setattr(app, "_load_config", lambda: {"sounds_enabled": False})
+    monkeypatch.setattr(app_config, "_load_config", lambda: {"sounds_enabled": False})
 
     settings = app._Settings()
 
@@ -63,7 +64,9 @@ def test_a_configuration_written_before_this_existed_still_reads(monkeypatch):
 
 def test_a_cue_this_version_does_not_know_is_dropped(monkeypatch):
     """A newer version's configuration must not break an older one."""
-    monkeypatch.setattr(app, "_load_config", lambda: {"sound_cues": {"send": False, "kazoo": True}})
+    monkeypatch.setattr(
+        app_config, "_load_config", lambda: {"sound_cues": {"send": False, "kazoo": True}}
+    )
 
     settings = app._Settings()
 
@@ -74,8 +77,8 @@ def test_a_cue_this_version_does_not_know_is_dropped(monkeypatch):
 
 def test_the_choice_is_saved_alongside_the_master_switch(monkeypatch):
     written: list[dict] = []
-    monkeypatch.setattr(app, "_load_config", lambda: {"backend": "codex"})
-    monkeypatch.setattr(app, "_save_config", written.append)
+    monkeypatch.setattr(app_config, "_load_config", lambda: {"backend": "codex"})
+    monkeypatch.setattr(app_config, "_save_config", written.append)
     settings = app._Settings()
     settings.sound_cues["working"] = False
 

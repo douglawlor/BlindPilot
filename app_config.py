@@ -1,38 +1,39 @@
-"""BlindPilot's own configuration file, and the vocabulary stored in it.
+"""BlindPilot's own settings file, and the preferences it holds.
 
-This module owns where the settings live and how they are read and written,
-and the names of the preferences that file holds. It does not own the
-settings object itself, nor the dialogs that change it: those are callers,
-and they stay where they can reach the window.
+This module owns where the settings live, the names of the preferences
+that file holds, the settings object built from them, and the address of
+a Hermes running on another computer.
 
-One rule governs the boundary. The functions here call each other, so a name
-patched on this module is what reaches them; a name patched on the module
-that *calls* into here is not. `_load_config` reads `_config_path` and
-`_legacy_config_path` from this module's namespace, and `_save_config` reads
-`_config_path` and `_config_dir` from it, so those four are patched here.
-`_load_config` and `_save_config` themselves are called from all over the
-application, and each caller reaches the name in its own namespace.
+The file itself is read and written by
+`accessible_ai.storage.preferences`, which the Codex backend's Account
+choice shares: one file, two writers, one lock.
 
-Nothing here imports wx. The settings file and the words in it do not need a
-window, and a module that did would take one with it.
+One rule governs the boundary. The functions here call each other, so a
+name patched on this module is what reaches them; a name patched on the
+module that *calls* into here is not. `_load_config` reads `_config_path`
+and `_legacy_config_path` from this module's namespace, and `_save_config`
+reads `_config_path` and `_config_dir` from it, so those four are
+patched here. `_load_config` and `_save_config` themselves are called
+from all over the application, and each caller reaches the name in its
+own namespace.
+
+Nothing here imports wx. The settings file and the words in it do not
+need a window, and a module that did would take one with it.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 import os
 import platform
 from pathlib import Path
 
+from accessible_ai.storage import preferences
 from agent_backends import blindpilot_config_dir, migrate_macos_legacy_dirs
 from hermes_backend import REMOTE_CREDENTIALS, remote_ws_url
 
-# Before any setting is read: an install that predates the macOS conventions
-# keeps its files in ~/.config and ~/.local/share, and they belong in
-# ~/Library/Application Support. The move is on the import path because the
-# remote settings below read config.json to build themselves.
-migrate_macos_legacy_dirs()
+MODEL_REFRESH_MINUTES_DEFAULT = 15
+MODEL_REFRESH_MINUTES_MIN = 0
+MODEL_REFRESH_MINUTES_MAX = 240
 
 
 def _config_dir() -> Path:
@@ -52,39 +53,19 @@ def _config_path() -> Path:
 
 
 def _load_config() -> dict:
-    for path in (_config_path(), _legacy_config_path()):
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-                return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            continue
-    return {}
+    return preferences.load_config((_config_path(), _legacy_config_path()))
 
 
 def _save_config(cfg: dict) -> bool:
     """Write the settings. False if they did not get written.
 
-    Callers announce what they saved, so they need to know. Written to one
-    side and moved into place, so an interruption partway through cannot
-    leave a half-written file: `_load_config` cannot parse one of those and
-    falls back to the legacy claude-reader file, or to empty.
+    Callers announce what they saved, so they need to know. The write itself is
+    `accessible_ai.storage.preferences`, shared with the Codex backend's Account
+    choice, which lives in this same file: only the keys handed in are changed,
+    so a save built from the settings as they were read cannot put back an
+    Account choice -- or anything else -- that was written in between.
     """
-    path = _config_path()
-    temporary = path.with_name(path.name + ".new")
-    try:
-        _config_dir().mkdir(parents=True, exist_ok=True)
-        with open(temporary, "w", encoding="utf-8") as fh:
-            json.dump(cfg, fh, indent=2)
-        os.replace(temporary, path)
-        return True
-    except (OSError, ValueError, TypeError):
-        logging.getLogger("blindpilot").warning("could not write the settings to %s", path)
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        return False
+    return preferences.update_config(_config_path(), cfg)
 
 
 # How much of a run is read out.
@@ -122,7 +103,6 @@ SOUND_CUES: tuple[tuple[str, str, str], ...] = (
     ("received", "&Answer received", "Play a sound when the answer arrives"),
     ("error", "So&mething went wrong", "Play a sound when a turn fails"),
 )
-
 
 CUE_LOOP = "loop"
 CUE_PERIODIC = "periodic"
@@ -177,6 +157,122 @@ def _valid_cue_seconds(value: object) -> int:
     except (TypeError, ValueError):
         return CUE_SECONDS_DEFAULT
     return max(CUE_SECONDS_MIN, min(CUE_SECONDS_MAX, seconds))
+
+
+def _valid_model_refresh_minutes(value: object) -> int:
+    """The background model-refresh interval in minutes, whatever config holds.
+
+    A hand-edited or newer-version config must not stop the app from starting,
+    so anything unreadable falls back to the default, and anything outside the
+    offered range is clamped into it -- a negative reading as "off" rather than
+    as a refresh that never runs.
+    """
+    try:
+        minutes = int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return MODEL_REFRESH_MINUTES_DEFAULT
+    return max(MODEL_REFRESH_MINUTES_MIN, min(MODEL_REFRESH_MINUTES_MAX, minutes))
+
+
+class _Settings:
+    """User preferences that change how a run is presented, saved to config.
+
+    ``live_rows`` and ``speak_live`` default to on, so activity appears in the
+    list and is spoken automatically through NVDA, JAWS, or VoiceOver. Turning both off restores the
+    pre-live-narration behaviour: nothing appears until the turn ends, and
+    nothing is spoken. ``text_view`` swaps the responses list for a read-only
+    edit field and defaults to off.
+
+    ``progress_cue`` decides how the working cue behaves while a turn runs:
+
+    ``loop``
+        the original behaviour, the cue repeating end to end for the whole turn
+    ``periodic``
+        the cue once every ``progress_cue_seconds``, so a long run still says it
+        is alive without repeating over the answer being spoken
+    ``off``
+        no working cue at all; send and received still play
+
+    ``periodic`` is the default. The cue file is under a second long, so looping
+    it means dozens of repeats per turn on top of the speech, and until now
+    there was no way to turn it down.
+    """
+
+    def __init__(self) -> None:
+        cfg = _load_config()
+        self.live_rows = bool(cfg.get("live_rows", True))
+        self.speak_live = bool(cfg.get("speak_live", True))
+        self.sounds_enabled = bool(cfg.get("sounds_enabled", True))
+        # A mode this version does not know is somebody else's config, not an
+        # instruction to go quiet.
+        narration = cfg.get("narration")
+        self.narration = (
+            narration
+            if isinstance(narration, str)
+            and narration in {mode for mode, _label, _help in NARRATION_MODES}
+            else NARRATION_EVERYTHING
+        )
+        # `sounds_enabled` above is the master switch and keeps its meaning.
+        # These say which cues it turns on, because the three are not
+        # interchangeable: "working" is a loop that runs for the whole turn,
+        # so wanting it gone is not the same wish as wanting silence.
+        #
+        # Missing keys default to on, so a configuration written before this
+        # existed reads as it always did; unknown ones are dropped, so one
+        # written by a newer version cannot mute or break this one.
+        stored = cfg.get("sound_cues")
+        stored = stored if isinstance(stored, dict) else {}
+        self.sound_cues = {cue: bool(stored.get(cue, True)) for cue, _label, _help in SOUND_CUES}
+        self.text_view = bool(cfg.get("text_view", False))
+        self.show_thinking = bool(cfg.get("show_thinking", False))
+        # Whether a question a turn only wrote into its answer opens the same
+        # dialog a question asked through the backend's own tool opens. On by
+        # default: a turn that ends waiting on an answer nobody was told about
+        # is the thing this exists to stop. It can be turned off because the
+        # judgement is a reading of prose and can be wrong, and a dialog that
+        # opens when nothing was asked interrupts.
+        self.ask_written_questions = bool(cfg.get("ask_written_questions", True))
+        # A system notification when a turn ends, fails or asks something while
+        # another application has focus. Nothing is shown while BlindPilot is
+        # in front: the announcement already said it.
+        self.notify_in_background = bool(cfg.get("notify_in_background", True))
+        # Read your message back as it goes, so you hear what was actually
+        # sent: dictation and paste put text in the prompt nobody heard.
+        self.read_back_sent = bool(cfg.get("read_back_sent", True))
+        self.progress_cue = _valid_progress_cue(cfg.get("progress_cue"))
+        self.progress_cue_seconds = _valid_cue_seconds(cfg.get("progress_cue_seconds"))
+        # Minutes between background re-reads of a tab's model catalog; 0 turns
+        # it off. Off is a real choice: each read is a provider CLI start.
+        self.model_refresh_minutes = _valid_model_refresh_minutes(
+            cfg.get("model_refresh_minutes", MODEL_REFRESH_MINUTES_DEFAULT)
+        )
+        # Read again in main() before the first window, which is the only
+        # point wxWidgets lets it be set. Kept here so Preferences can show
+        # and save it like the rest.
+        self.appearance = _valid_appearance(cfg.get("appearance"))
+
+    def save(self) -> bool:
+        """Write the settings out. False means the file did not take them."""
+        cfg = _load_config()
+        cfg["live_rows"] = self.live_rows
+        cfg["speak_live"] = self.speak_live
+        cfg["sounds_enabled"] = self.sounds_enabled
+        cfg["narration"] = self.narration
+        cfg["sound_cues"] = self.sound_cues
+        cfg["text_view"] = self.text_view
+        cfg["show_thinking"] = self.show_thinking
+        cfg["ask_written_questions"] = self.ask_written_questions
+        cfg["notify_in_background"] = self.notify_in_background
+        cfg["read_back_sent"] = self.read_back_sent
+        cfg["progress_cue"] = self.progress_cue
+        cfg["progress_cue_seconds"] = self.progress_cue_seconds
+        cfg["model_refresh_minutes"] = self.model_refresh_minutes
+        cfg["appearance"] = self.appearance
+        return _save_config(cfg)
+
+
+migrate_macos_legacy_dirs()
+SETTINGS = _Settings()
 
 
 class _RemoteHermes:

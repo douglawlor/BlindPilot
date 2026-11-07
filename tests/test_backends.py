@@ -13,6 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 import agent_backends
+import process_utils
+import questions
 from agent_backends import (
     BACKEND_CLAUDE,
     BACKEND_CODEX,
@@ -124,6 +126,94 @@ def test_codex_catalog_includes_all_reported_reasoning_levels(monkeypatch, tmp_p
     assert current_model == ""
     assert current_effort == ""
     assert error == ""
+
+
+# A stand-in for the two forms of `codex debug models`: the refreshing form
+# (no extra flags) and the installed-release copy (`--bundled`). Each entry is
+# the JSON that form would print, or None for a form that cannot be run.
+#
+# Only the model probe is recorded and answered. Building the child's
+# environment runs the user's own login shell for its PATH on POSIX, through
+# the same `subprocess.run`, and recording that made the call list carry
+# `printf '%s\n' "$PATH"` ahead of the probe on Linux and macOS while passing
+# on Windows, where the PATH is read from the environment instead. Anything
+# that is not the probe is answered empty, which is a PATH with nothing in it.
+def _codex_models_run(payloads: dict[tuple[str, ...], object]):
+    calls: list[tuple[str, ...]] = []
+
+    def run(command, **_kwargs):
+        if tuple(command[1:3]) != ("debug", "models"):
+            return SimpleNamespace(stdout="", returncode=0)
+        extra = tuple(command[3:])
+        calls.append(extra)
+        payload = payloads.get(extra)
+        if payload is None:
+            raise OSError("Codex could not be asked")
+        return SimpleNamespace(stdout=json.dumps(payload))
+
+    return run, calls
+
+
+def test_the_codex_call_list_ignores_a_command_that_is_not_the_model_probe():
+    """The fake must not record the login-shell PATH probe as a model read.
+
+    That probe only happens where `platform.system()` is not Windows, so a test
+    that records every call passes here and fails on Linux and macOS.
+    """
+    run, calls = _codex_models_run({(): {"models": [{"slug": "gpt-6-sol"}]}})
+
+    run(["codex", "debug", "models"])
+    run(["/bin/sh", "-l", "-c", "printf '%s\\n' \"$PATH\""])
+
+    assert calls == [()]
+
+
+def test_codex_offers_only_the_models_the_service_still_lists(monkeypatch, tmp_path):
+    """The bug this closes: a model the service retired stayed on offer, and a
+    hidden internal one was offered at all, because BlindPilot read the copy
+    bundled in the installed binary instead of the refreshed catalog."""
+    live = {
+        "models": [
+            {"slug": "gpt-6-sol", "visibility": "list"},
+            {"slug": "gpt-reserve", "visibility": "hide"},
+            {"slug": "codex-auto-review", "visibility": "hide"},
+        ]
+    }
+    bundled = {
+        "models": [
+            {"slug": "gpt-6-sol", "visibility": "list"},
+            {"slug": "gpt-5.5", "visibility": "list"},
+        ]
+    }
+    run, calls = _codex_models_run({(): live, ("--bundled",): bundled})
+    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(agent_backends.subprocess, "run", run)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing"))
+
+    models, _efforts, _current, _effort, error = codex_model_options()
+
+    assert models == ["gpt-6-sol"]
+    assert error == ""
+    assert calls[0] == (), "the refreshing form must be asked first"
+    assert ("--bundled",) not in calls, (
+        "the installed copy must not be read when the service answers"
+    )
+
+
+def test_codex_falls_back_to_the_installed_copy_when_the_service_is_unreachable(
+    monkeypatch, tmp_path
+):
+    bundled = {"models": [{"slug": "gpt-6-sol", "visibility": "list"}]}
+    run, calls = _codex_models_run({("--bundled",): bundled})
+    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(agent_backends.subprocess, "run", run)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing"))
+
+    models, _efforts, _current, _effort, error = codex_model_options()
+
+    assert models == ["gpt-6-sol"]
+    assert calls == [(), ("--bundled",)]
+    assert "refresh" in error and "installed release" in error
 
 
 def test_codex_permission_modes_translate_to_native_sandboxes():
@@ -771,11 +861,11 @@ def test_backend_processes_are_launched_without_a_console_window():
     the keyword has to be absent, not zero, or ``subprocess`` rejects it.
     """
     if platform.system() == "Windows":
-        assert agent_backends.CREATE_NO_WINDOW == 0x08000000
-        assert agent_backends.no_window_kwargs() == {"creationflags": 0x08000000}
+        assert process_utils.CREATE_NO_WINDOW == 0x08000000
+        assert process_utils.no_window_kwargs() == {"creationflags": 0x08000000}
     else:
-        assert agent_backends.CREATE_NO_WINDOW == 0
-        assert agent_backends.no_window_kwargs() == {}
+        assert process_utils.CREATE_NO_WINDOW == 0
+        assert process_utils.no_window_kwargs() == {}
 
 
 def test_a_worker_that_fails_to_launch_codex_reports_why(monkeypatch):
@@ -799,7 +889,10 @@ def test_a_worker_that_fails_to_launch_codex_reports_why(monkeypatch):
     worker._do_run()
 
     assert failures and failures[0].startswith("Failed to launch Codex")
-    assert captured.get("creationflags", 0) == agent_backends.CREATE_NO_WINDOW
+    # CREATE_SUSPENDED (4) joins CREATE_NO_WINDOW only on Windows; POSIX
+    # Popen rejects creationflags outright.
+    suspended = 4 if platform.system() == "Windows" else 0
+    assert captured.get("creationflags", 0) == process_utils.CREATE_NO_WINDOW | suspended
 
 
 def test_freebuff_keeps_its_choice_when_freebuff_resets_its_own_setting(
@@ -2313,7 +2406,7 @@ def test_a_catalog_that_could_not_be_read_still_offers_the_remembered_model(
 def test_a_backend_is_started_in_a_group_of_its_own():
     # npm's `codex` and `freebuff` are Node launchers that run the real agent
     # as a child. Stopping only the launcher leaves that child running.
-    kwargs = agent_backends.own_group_kwargs()
+    kwargs = process_utils.own_group_kwargs()
     if platform.system() == "Windows":
         assert kwargs == {}
     else:
@@ -2349,7 +2442,7 @@ def test_stopping_a_child_never_signals_blindpilots_own_group(monkeypatch):
             return 0
 
     child = Child()
-    agent_backends.end_process_group(child)
+    process_utils.end_process_group(child)
 
     assert signalled == []
     assert child.killed
@@ -2376,7 +2469,7 @@ def test_a_child_that_leads_its_own_group_is_stopped_as_a_group(monkeypatch):
         def wait(self, timeout=None):
             return 0
 
-    agent_backends.end_process_group(Child())
+    process_utils.end_process_group(Child())
 
     assert signalled == [99]
 
@@ -2398,7 +2491,7 @@ def test_stopping_a_child_that_already_exited_does_nothing(monkeypatch):
         def kill(self):
             pytest.fail("a finished process must not be killed")
 
-    agent_backends.end_process_group(Gone())
+    process_utils.end_process_group(Gone())
 
 
 def test_a_killed_child_is_always_reaped_within_a_bound(monkeypatch):
@@ -2427,10 +2520,10 @@ def test_a_killed_child_is_always_reaped_within_a_bound(monkeypatch):
             waited.append(timeout)
             return 0
 
-    agent_backends.end_process_group(Child())
+    process_utils.end_process_group(Child())
     assert waited == [5]
 
-    agent_backends.end_process_group(Child(), timeout=2)
+    process_utils.end_process_group(Child(), timeout=2)
     assert waited == [5, 2]
 
 
@@ -2453,55 +2546,62 @@ class _Child:
 
 
 def test_on_windows_a_child_is_stopped_with_its_whole_tree(monkeypatch):
-    # TerminateProcess ends one process. Codex's app-server has a dozen or
-    # more MCP children, and stopping only the parent left every one of them
-    # running in Task Manager with nobody to stop them.
+    # The Job handle identifies owned descendants even after the root exits.
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
-    monkeypatch.setenv("SystemRoot", r"C:\Win")
-    ran: list[tuple[list, dict]] = []
-
-    def fake_run(argv, **kwargs):
-        ran.append((argv, kwargs))
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(agent_backends.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_backends.subprocess,
+        "run",
+        lambda *_a, **_k: pytest.fail("PID-based taskkill is unsafe"),
+    )
     child = _Child()
+    closed = []
+    child._blindpilot_job = SimpleNamespace(close=lambda: closed.append(True))
 
-    agent_backends.end_process_group(child)
+    process_utils.end_process_group(child)
 
-    ((argv, kwargs),) = ran
-    # The full path: a `taskkill` planted on PATH must not be what runs.
-    assert argv == [r"C:\Win\System32\taskkill.exe", "/T", "/F", "/PID", "99"]
-    assert kwargs.get("creationflags", 0) == agent_backends.CREATE_NO_WINDOW
-    assert child.killed, "the parent is still killed directly, in case taskkill missed it"
+    assert closed
+    assert child.killed, "the exact root still needs to be stopped"
 
 
-def test_on_windows_a_tree_kill_that_fails_still_kills_the_child(monkeypatch):
-    monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
+def test_on_windows_an_unowned_process_only_kills_the_exact_root(monkeypatch):
+    monkeypatch.setattr(process_utils.platform, "system", lambda: "Windows")
 
     def broken_run(_argv, **_kwargs):
-        raise OSError("taskkill is missing")
+        pytest.fail("an unowned PID must never be used for a tree sweep")
 
-    monkeypatch.setattr(agent_backends.subprocess, "run", broken_run)
+    monkeypatch.setattr(process_utils.subprocess, "run", broken_run)
     child = _Child()
 
-    agent_backends.end_process_group(child)
+    process_utils.end_process_group(child)
 
     assert child.killed
 
 
+def test_on_windows_an_exited_root_still_closes_its_owned_job(monkeypatch):
+    monkeypatch.setattr(process_utils.platform, "system", lambda: "Windows")
+    child = _Child()
+    child.poll = lambda: 0
+    closed = []
+    child._blindpilot_job = SimpleNamespace(close=lambda: closed.append(True))
+
+    process_utils.end_process_group(child)
+
+    assert closed
+    assert not child.killed
+
+
 def test_off_windows_no_tree_kill_is_attempted(monkeypatch):
-    monkeypatch.setattr(agent_backends.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(agent_backends.os, "killpg", lambda *_a: None, raising=False)
-    monkeypatch.setattr(agent_backends.os, "getpgid", lambda pid: pid, raising=False)
-    monkeypatch.setattr(agent_backends.signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(process_utils.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(process_utils.os, "killpg", lambda *_a: None, raising=False)
+    monkeypatch.setattr(process_utils.os, "getpgid", lambda pid: pid, raising=False)
+    monkeypatch.setattr(process_utils.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(
-        agent_backends.subprocess,
+        process_utils.subprocess,
         "run",
         lambda *_a, **_k: pytest.fail("taskkill is a Windows tool"),
     )
 
-    agent_backends.end_process_group(_Child())
+    process_utils.end_process_group(_Child())
 
 
 def test_opencode_is_stopped_with_its_tree_on_windows(monkeypatch):
@@ -2509,12 +2609,7 @@ def test_opencode_is_stopped_with_its_tree_on_windows(monkeypatch):
     # POSIX. On Windows terminate() is TerminateProcess, which asks nothing
     # and leaves the children, so the tree is ended in one go instead.
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
-    ran: list[list] = []
-    monkeypatch.setattr(
-        agent_backends.subprocess,
-        "run",
-        lambda argv, **_k: ran.append(argv) or SimpleNamespace(returncode=0),
-    )
+    closed = []
 
     class _Proc(_Child):
         def terminate(self):
@@ -2522,9 +2617,10 @@ def test_opencode_is_stopped_with_its_tree_on_windows(monkeypatch):
 
     server = agent_backends.OpencodeServer.__new__(agent_backends.OpencodeServer)
     server._proc = _Proc()
+    server._proc._blindpilot_job = SimpleNamespace(close=lambda: closed.append(True))
     server.stop()
 
-    assert ran and ran[0][-1] == "99"
+    assert closed
 
 
 def test_stopping_an_already_exited_server_still_closes_its_pipes():
@@ -3158,6 +3254,6 @@ def test_question_options_keep_their_previews():
             ],
         }
     ]
-    questions = agent_backends._questions(raw, multi_key="multiSelect")
-    assert questions[0].options[0].preview == "plan: edit one file"
-    assert questions[0].options[1].preview == ""
+    parsed = questions._questions(raw, multi_key="multiSelect")
+    assert parsed[0].options[0].preview == "plan: edit one file"
+    assert parsed[0].options[1].preview == ""

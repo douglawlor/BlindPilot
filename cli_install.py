@@ -8,10 +8,10 @@ PATH so they work in a terminal as well as in here.
 Nothing here touches the screen reader or a window, so it can be tested on
 its own.
 
-One name comes back from where it lives. `APP_VERSION` has to stay in
-blindpilot_app.py, because the packaging spec reads it out of that file by
-pattern, so it is fetched when a download needs it rather than at import
-time. That is the only way this module reaches back.
+The names the installer calls among its own are patched on this module,
+because that is where the calls are made from. A patch aimed at
+blindpilot_app rebinds the name there and the installer carries on with
+the real one -- which, for install_backend, is a real npm install.
 """
 
 from __future__ import annotations
@@ -51,7 +51,6 @@ from agent_backends import (
     find_backend_cli,
     freebuff_model_options,
     invalidate_backend_cache,
-    no_window_kwargs,
     normalize_backend,
     set_freebuff_model,
     stop_opencode_server,
@@ -59,6 +58,7 @@ from agent_backends import (
 )
 from app_updater import version_tuple
 from certificates import open_url
+from process_utils import no_window_kwargs
 from hermes_backend import wsl_exe as muse_wsl_exe
 from muse_backend import (
     muse_cli_path,
@@ -68,12 +68,7 @@ from muse_backend import (
 
 
 def _user_agent() -> str:
-    """What the downloads say they are.
-
-    The version lives in blindpilot_app.py because the packaging spec reads
-    it out of that file by pattern, so it is fetched here rather than
-    imported at module level, which would be a circle.
-    """
+    # The packaging spec reads the version directly from blindpilot_app.py.
     from blindpilot_app import APP_VERSION
 
     return f"BlindPilot/{APP_VERSION}"
@@ -174,14 +169,6 @@ def _find_claude() -> Optional[str]:
 
     return _login_shell_which(CLAUDE_BIN)
 
-
-# ---------------------------------------------------------------------------
-# Installing Claude Code, and making it visible to every shell.
-#
-# Both official native installers are documented at code.claude.com/docs/en/setup.
-# Neither needs administrator rights or Node.js: they drop a real binary in
-# ~/.local/bin and self-update from then on.
-# ---------------------------------------------------------------------------
 
 WINDOWS_INSTALL_PS1_URL = "https://claude.ai/install.ps1"
 POSIX_INSTALL_SH_URL = "https://claude.ai/install.sh"
@@ -1479,12 +1466,14 @@ def _repair_claude_native_update(binary: str, log: Callable[[str], None]) -> boo
 
 
 def _drop_codex_server(log: Callable[[str], None]) -> None:
-    """Let go of the held Codex app-server before npm replaces its executable.
+    """Let go of every held Codex app-server before npm replaces its executable.
 
-    Windows will not overwrite an executable that is running.
+    Windows will not overwrite an executable that is running. Codex may be held
+    per ChatGPT-plan Account, so this reaches every Account's process: leaving
+    one behind fails the update exactly as one left behind used to.
     """
     log("Stopping Codex's app-server so its executable can be replaced...")
-    backend_pool.pool().drop(backend_pool.pool_key(BACKEND_CODEX))
+    backend_pool.pool().drop_backend(BACKEND_CODEX)
 
 
 def update_backend(backend: str, log: Callable[[str], None]) -> bool:

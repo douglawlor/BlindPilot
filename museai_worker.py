@@ -37,14 +37,17 @@ import threading
 import time
 from typing import Optional
 
+from owned_process import owned_popen
 from agent_backends import (
     BACKEND_MUSEAI,
     _TurnWorker,
-    end_process_group,
     find_backend_cli,
+    subprocess_env,
+)
+from process_utils import (
+    end_process_group,
     no_window_kwargs,
     own_group_kwargs,
-    subprocess_env,
 )
 
 # Real muse.ai work (browsing, connectors, SSH) takes minutes; an hour covers
@@ -262,7 +265,7 @@ class MuseAiWorker(_TurnWorker):
         env["PYTHONIOENCODING"] = "utf-8"
         env["BLINDPILOT_MUSEAI_WATCH"] = session
         try:
-            proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            proc = owned_popen(  # noqa: S603 - fixed argv, no shell
                 [binary, "watch"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -436,7 +439,7 @@ class MuseAiWorker(_TurnWorker):
         env = subprocess_env(binary)
         env["PYTHONIOENCODING"] = "utf-8"
         try:
-            proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            proc = owned_popen(  # noqa: S603 - fixed argv, no shell
                 [binary, *args],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,

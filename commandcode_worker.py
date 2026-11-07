@@ -36,21 +36,26 @@ import threading
 import urllib.parse
 from typing import Callable, Optional
 
+from owned_process import owned_popen
 from agent_backends import (
     BACKEND_COMMANDCODE,
     SUBAGENT_COMPLETED,
     SUBAGENT_FAILED,
     SUBAGENT_RUNNING,
-    AskQuestions,
     SubagentReport,
     _tool_use_label,
-    end_process_group,
     find_backend_cli,
     ignore_subagents,
-    no_window_kwargs,
-    own_group_kwargs,
     subagent_line,
     subprocess_env,
+)
+from questions import (
+    AskQuestions,
+)
+from process_utils import (
+    end_process_group,
+    no_window_kwargs,
+    own_group_kwargs,
 )
 from commandcode_router import (
     LIMIT_LABELS,
@@ -701,7 +706,7 @@ class CommandcodeWorker(threading.Thread):
         )
         self._warn_about_bypass_limits()
         try:
-            proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            proc = owned_popen(  # noqa: S603 - fixed argv, no shell
                 command,
                 cwd=self._cwd,
                 stdin=subprocess.PIPE,
