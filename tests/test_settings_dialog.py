@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import blindpilot_app as app
+import settings_files_dialog
 from agent_backends import SettingsFile
 
 
@@ -33,7 +34,9 @@ def _entry(tmp_path, name="settings.json", scope="global", exists=True):
 def opened(monkeypatch):
     """What BlindPilot handed to the platform."""
     calls: list[Path] = []
-    monkeypatch.setattr(app, "_open_path", lambda path: calls.append(Path(path)) or True)
+    monkeypatch.setattr(
+        settings_files_dialog, "_open_path", lambda path: calls.append(Path(path)) or True
+    )
     return calls
 
 
@@ -76,7 +79,7 @@ def test_a_missing_file_in_a_missing_folder_says_where_it_would_be(tmp_path, ope
 
 
 def test_an_opener_that_fails_says_so_rather_than_claiming_success(tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "_open_path", lambda _path: False)
+    monkeypatch.setattr(settings_files_dialog, "_open_path", lambda _path: False)
     entry = _entry(tmp_path)
 
     said = app._reach_settings_file(entry)
@@ -125,7 +128,9 @@ def _reached(monkeypatch):
     opener stays silent whether or not the dialog acted.
     """
     calls = []
-    monkeypatch.setattr(app, "_reach_settings_file", lambda entry: calls.append(entry) or "")
+    monkeypatch.setattr(
+        settings_files_dialog, "_reach_settings_file", lambda entry: calls.append(entry) or ""
+    )
     return calls
 
 
