@@ -28,6 +28,7 @@ import logging
 import pytest
 
 import blindpilot_app as app
+import remote_hermes_dialog
 import app_config
 
 
@@ -521,12 +522,16 @@ def test_applying_the_remote_address_carries_the_save_answer(monkeypatch):
     address; dropping the return value makes it describe a connection that
     was never saved."""
     monkeypatch.setattr(
-        app, "REMOTE_HERMES", type("RemoteStub", (), {"save": lambda self: False})()
+        remote_hermes_dialog,
+        "REMOTE_HERMES",
+        type("RemoteStub", (), {"save": lambda self: False})(),
     )
 
     assert app.RemoteHermesDialog.apply(_remote_fields()) is False
 
-    monkeypatch.setattr(app, "REMOTE_HERMES", type("RemoteStub", (), {"save": lambda self: True})())
+    monkeypatch.setattr(
+        remote_hermes_dialog, "REMOTE_HERMES", type("RemoteStub", (), {"save": lambda self: True})()
+    )
 
     assert app.RemoteHermesDialog.apply(_remote_fields()) is True
 
