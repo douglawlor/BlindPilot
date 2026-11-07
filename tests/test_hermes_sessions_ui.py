@@ -17,6 +17,7 @@ wx = pytest.importorskip("wx")
 
 import blindpilot_app  # noqa: E402
 from blindpilot_app import HermesSessionsDialog, hermes_session_label  # noqa: E402
+import hermes_sessions_dialog  # noqa: E402
 
 
 CATALOG = [
@@ -50,7 +51,7 @@ LIVE = {"20260902_142652_5d15e2"}
 
 def _install_catalog(monkeypatch, sessions=CATALOG, live=LIVE, error=""):
     monkeypatch.setattr(
-        blindpilot_app,
+        hermes_sessions_dialog,
         "hermes_session_catalog",
         lambda *a, **k: (list(sessions), set(live), error),
         raising=True,
@@ -196,7 +197,7 @@ def test_choosing_a_finished_conversation_is_not_attaching(monkeypatch, frame):
 def test_a_failure_is_spoken_and_leaves_no_openable_row(monkeypatch, frame):
     """A blind user cannot read a console to find out why the list is empty."""
     spoken: list[str] = []
-    monkeypatch.setattr(blindpilot_app, "announce", spoken.append, raising=True)
+    monkeypatch.setattr(hermes_sessions_dialog, "announce", spoken.append, raising=True)
     _install_catalog(monkeypatch, sessions=[], live=set(), error="Nothing is listening at ws://x")
 
     dialog = HermesSessionsDialog(frame, cwd=".")
@@ -226,14 +227,14 @@ def test_the_dialog_opens_before_hermes_answers(monkeypatch, frame):
     started = threading.Event()
     release = threading.Event()
     spoken: list[str] = []
-    monkeypatch.setattr(blindpilot_app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(hermes_sessions_dialog, "announce", lambda text, **_k: spoken.append(text))
 
     def slow_catalog(*_a, **_k):
         started.set()
         assert release.wait(5)
         return list(CATALOG), set(LIVE), ""
 
-    monkeypatch.setattr(blindpilot_app, "hermes_session_catalog", slow_catalog)
+    monkeypatch.setattr(hermes_sessions_dialog, "hermes_session_catalog", slow_catalog)
     began = time.monotonic()
     dialog = HermesSessionsDialog(frame, cwd=".")
     try:
@@ -258,7 +259,7 @@ def test_a_refresh_returns_at_once_and_says_refreshed_when_the_answer_arrives(mo
     started = threading.Event()
     release = threading.Event()
     spoken: list[str] = []
-    monkeypatch.setattr(blindpilot_app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(hermes_sessions_dialog, "announce", lambda text, **_k: spoken.append(text))
 
     def catalog(*_a, **_k):
         calls.append(1)
@@ -268,7 +269,7 @@ def test_a_refresh_returns_at_once_and_says_refreshed_when_the_answer_arrives(mo
         assert release.wait(5)
         return list(CATALOG), set(LIVE), ""
 
-    monkeypatch.setattr(blindpilot_app, "hermes_session_catalog", catalog)
+    monkeypatch.setattr(hermes_sessions_dialog, "hermes_session_catalog", catalog)
     dialog = HermesSessionsDialog(frame, cwd=".")
     _loaded(dialog)
     spoken.clear()
@@ -290,7 +291,7 @@ def test_a_refresh_returns_at_once_and_says_refreshed_when_the_answer_arrives(mo
 def test_a_failed_refresh_speaks_the_error_instead_of_refreshed(monkeypatch, frame):
     calls: list[int] = []
     spoken: list[str] = []
-    monkeypatch.setattr(blindpilot_app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(hermes_sessions_dialog, "announce", lambda text, **_k: spoken.append(text))
 
     def catalog(*_a, **_k):
         calls.append(1)
@@ -298,7 +299,7 @@ def test_a_failed_refresh_speaks_the_error_instead_of_refreshed(monkeypatch, fra
             return list(CATALOG), set(LIVE), ""
         return [], set(), "Gateway went away"
 
-    monkeypatch.setattr(blindpilot_app, "hermes_session_catalog", catalog)
+    monkeypatch.setattr(hermes_sessions_dialog, "hermes_session_catalog", catalog)
     dialog = HermesSessionsDialog(frame, cwd=".")
     _loaded(dialog)
     spoken.clear()
@@ -315,12 +316,12 @@ def test_a_failed_refresh_speaks_the_error_instead_of_refreshed(monkeypatch, fra
 
 def test_a_catalog_exception_is_spoken_as_an_error(monkeypatch, frame):
     spoken: list[str] = []
-    monkeypatch.setattr(blindpilot_app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(hermes_sessions_dialog, "announce", lambda text, **_k: spoken.append(text))
 
     def catalog(*_a, **_k):
         raise OSError("socket closed")
 
-    monkeypatch.setattr(blindpilot_app, "hermes_session_catalog", catalog)
+    monkeypatch.setattr(hermes_sessions_dialog, "hermes_session_catalog", catalog)
     dialog = HermesSessionsDialog(frame, cwd=".")
     try:
         _wait(lambda: any("socket closed" in message for message in spoken))
@@ -335,21 +336,21 @@ def test_closing_during_loading_discards_the_result(monkeypatch, frame):
     release = threading.Event()
     dispatched = threading.Event()
     spoken: list[str] = []
-    monkeypatch.setattr(blindpilot_app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(hermes_sessions_dialog, "announce", lambda text, **_k: spoken.append(text))
     wx_call_after = blindpilot_app._call_after_alive
 
     def dispatch(callback, *args):
         wx_call_after(callback, *args)
         dispatched.set()
 
-    monkeypatch.setattr(blindpilot_app, "_call_after_alive", dispatch)
+    monkeypatch.setattr(hermes_sessions_dialog, "_call_after_alive", dispatch)
 
     def catalog(*_a, **_k):
         started.set()
         release.wait(3)
         return list(CATALOG), set(LIVE), ""
 
-    monkeypatch.setattr(blindpilot_app, "hermes_session_catalog", catalog)
+    monkeypatch.setattr(hermes_sessions_dialog, "hermes_session_catalog", catalog)
     dialog = HermesSessionsDialog(frame, cwd=".")
     assert started.wait(1), "Hermes was never asked for its conversations"
     delivered = threading.Event()

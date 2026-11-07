@@ -1,9 +1,15 @@
-"""Run dialog work without blocking wx and discard stale completions."""
+"""Run dialog work without blocking wx and discard stale completions.
+
+Also holds _call_after_alive, the wx.CallAfter guard every dialog
+worker result is delivered through.
+"""
 
 from __future__ import annotations
 
 import threading
 from typing import Callable
+
+import wx
 
 
 def _start_daemon_worker(work: Callable[[], None]) -> None:
@@ -59,3 +65,20 @@ class TaskSlot:
         if self._closed or generation != self._generation:
             return
         done(result, error)
+
+
+def _call_after_alive(callback: Callable[..., object], *args: object) -> None:
+    """wx.CallAfter, unless the application has already gone.
+
+    A worker finishing during shutdown, or a history dialog's background load,
+    lands after wx.App is destroyed, where wx.CallAfter raises. The work is
+    dropped instead: the receiving end checks for a dead window too, so
+    nothing that could have been shown is lost.
+    """
+    if wx.GetApp() is None:
+        return
+    try:
+        wx.CallAfter(callback, *args)
+    except Exception:
+        if wx.GetApp() is not None:
+            raise
