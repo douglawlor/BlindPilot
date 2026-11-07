@@ -12,14 +12,15 @@ import pytest
 wx = pytest.importorskip("wx")
 
 import blindpilot_app as app  # noqa: E402
+import saved_prompts_dialog  # noqa: E402
 
 
 @pytest.fixture
 def config(monkeypatch):
     saved: dict = {}
-    monkeypatch.setattr(app, "_load_config", lambda: dict(saved))
-    monkeypatch.setattr(app, "_save_config", lambda cfg: saved.update(cfg) or True)
-    monkeypatch.setattr(app, "announce", lambda *a, **k: None)
+    monkeypatch.setattr(saved_prompts_dialog, "_load_config", lambda: dict(saved))
+    monkeypatch.setattr(saved_prompts_dialog, "_save_config", lambda cfg: saved.update(cfg) or True)
+    monkeypatch.setattr(saved_prompts_dialog, "announce", lambda *a, **k: None)
     return saved
 
 
