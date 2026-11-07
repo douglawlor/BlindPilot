@@ -20,6 +20,7 @@ import stub_wx
 stub_wx.install()
 
 import blindpilot_app  # noqa: E402
+import earcons  # noqa: E402
 import app_config  # noqa: E402
 
 
@@ -114,7 +115,7 @@ def test_off_plays_no_working_cue(config_dir: Path, monkeypatch) -> None:
     """
     settings = blindpilot_app._Settings()
     settings.progress_cue = blindpilot_app.CUE_OFF
-    monkeypatch.setattr(blindpilot_app, "SETTINGS", settings)
+    monkeypatch.setattr(earcons, "SETTINGS", settings)
 
     for system in ("Windows", "Darwin", "Linux"):
         cues = _Recording(system=system)
@@ -172,7 +173,7 @@ def test_periodic_plays_once_immediately_then_waits(config_dir: Path, monkeypatc
     settings = blindpilot_app._Settings()
     settings.progress_cue = blindpilot_app.CUE_PERIODIC
     settings.progress_cue_seconds = 37
-    monkeypatch.setattr(blindpilot_app, "SETTINGS", settings)
+    monkeypatch.setattr(earcons, "SETTINGS", settings)
 
     cues = _Recording()
     waits: list[float] = []
@@ -216,7 +217,7 @@ def test_stopping_ends_the_periodic_cue_on_windows(config_dir: Path, monkeypatch
     """
     settings = blindpilot_app._Settings()
     settings.progress_cue = blindpilot_app.CUE_PERIODIC
-    monkeypatch.setattr(blindpilot_app, "SETTINGS", settings)
+    monkeypatch.setattr(earcons, "SETTINGS", settings)
 
     cues = _Recording(system="Windows")
     cues.stop_progress()
@@ -230,7 +231,7 @@ def test_the_send_and_received_cues_survive_switching_the_cue_off(
     """Off means the repeating cue, not every sound in the application."""
     settings = blindpilot_app._Settings()
     settings.progress_cue = blindpilot_app.CUE_OFF
-    monkeypatch.setattr(blindpilot_app, "SETTINGS", settings)
+    monkeypatch.setattr(earcons, "SETTINGS", settings)
 
     cues = _Recording()
     cues.play_send()
@@ -273,7 +274,7 @@ def test_ending_a_turn_does_not_purge_the_received_cue(config_dir: Path, monkeyp
     """
     settings = blindpilot_app._Settings()
     settings.progress_cue = blindpilot_app.CUE_OFF
-    monkeypatch.setattr(blindpilot_app, "SETTINGS", settings)
+    monkeypatch.setattr(earcons, "SETTINGS", settings)
     calls: list = []
     _purge_watching_winsound(monkeypatch, calls)
 
@@ -306,7 +307,7 @@ def test_a_working_cue_is_still_silenced_when_the_answer_arrives(
     """
     settings = blindpilot_app._Settings()
     settings.progress_cue = blindpilot_app.CUE_LOOP
-    monkeypatch.setattr(blindpilot_app, "SETTINGS", settings)
+    monkeypatch.setattr(earcons, "SETTINGS", settings)
     calls: list = []
     _purge_watching_winsound(monkeypatch, calls)
 
@@ -333,7 +334,7 @@ def test_a_periodic_cue_is_silenced_when_the_answer_arrives(config_dir: Path, mo
     purge: its cue may be sounding at the moment the answer arrives."""
     settings = blindpilot_app._Settings()
     settings.progress_cue = blindpilot_app.CUE_PERIODIC
-    monkeypatch.setattr(blindpilot_app, "SETTINGS", settings)
+    monkeypatch.setattr(earcons, "SETTINGS", settings)
     calls: list = []
     _purge_watching_winsound(monkeypatch, calls)
     monkeypatch.setattr(blindpilot_app.threading, "Thread", lambda *a, **k: _NullThread())
