@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app
+import connect_dialog
 
 
 @pytest.mark.parametrize(
@@ -28,7 +29,7 @@ import blindpilot_app
 )
 def test_an_address_that_is_not_a_web_page_is_not_opened(url, monkeypatch):
     opened: list[str] = []
-    monkeypatch.setattr(blindpilot_app.webbrowser, "open", lambda target: opened.append(target))
+    monkeypatch.setattr(connect_dialog.webbrowser, "open", lambda target: opened.append(target))
 
     assert blindpilot_app._open_web_page(url) is False
     assert opened == [], f"handed to the platform's protocol handler: {url}"
@@ -45,7 +46,7 @@ def test_a_web_page_is_still_opened(url, monkeypatch):
         opened.append(target)
         return True
 
-    monkeypatch.setattr(blindpilot_app.webbrowser, "open", opener)
+    monkeypatch.setattr(connect_dialog.webbrowser, "open", opener)
 
     assert blindpilot_app._open_web_page(url) is True
     assert opened == [url]
@@ -57,6 +58,6 @@ def test_a_browser_that_will_not_start_is_not_an_error(monkeypatch):
     def opener(_target):
         raise OSError("no browser on this machine")
 
-    monkeypatch.setattr(blindpilot_app.webbrowser, "open", opener)
+    monkeypatch.setattr(connect_dialog.webbrowser, "open", opener)
 
     assert blindpilot_app._open_web_page("https://auth.example.com/authorize") is False

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import connect_dialog
 
 wx = pytest.importorskip("wx")
 
@@ -30,8 +31,8 @@ def test_provider_list_worker_drops_result_after_app_shutdown(frame, monkeypatch
             workers.append(self.target)
 
     monkeypatch.setattr(app.threading, "Thread", Thread)
-    monkeypatch.setattr(app, "opencode_providers", lambda: ([], set(), ""))
-    monkeypatch.setattr(app, "announce", lambda _message: None)
+    monkeypatch.setattr(connect_dialog, "opencode_providers", lambda: ([], set(), ""))
+    monkeypatch.setattr(connect_dialog, "announce", lambda _message: None)
     dialog = app.ConnectDialog(frame)
     try:
         monkeypatch.setattr(app.wx, "GetApp", lambda: None)
