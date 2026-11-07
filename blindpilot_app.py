@@ -53,7 +53,7 @@ import wave
 import weakref
 import webbrowser
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence, cast
 
@@ -181,6 +181,16 @@ from bug_report_dialog import BugReportDialog, _copy_to_clipboard, bug_report_bo
 from settings_files_dialog import SettingsFilesDialog, _reach_settings_file, _settings_label  # noqa: F401
 from add_dialogs import MEMORY_TYPES, AddAgentDialog, AddMemoryDialog, AddNoteDialog  # noqa: F401
 from saved_prompts_dialog import SavedPromptsDialog, _saved_prompts, _store_saved_prompts  # noqa: F401
+from model_dialog import (  # noqa: F401
+    AUTO_MODEL,
+    AUTO_MODEL_CHOICE,
+    DEFAULT_CHOICE,
+    ModelDialog,
+    ModelOptions,
+    _keep_choice,
+    _model_choice,
+    _plain,
+)
 
 # The Claude Code turn worker lives in claude_worker; it is re-exported so
 # the rest of the application and the tests keep reaching it as
@@ -500,9 +510,6 @@ def _open_web_page(url: str) -> bool:
 _FALLBACK_MODELS = ["default", "opus", "sonnet", "haiku", "fable", "opusplan"]
 _FALLBACK_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 # Shown first in both combo boxes: leave the flag off and let the CLI decide.
-DEFAULT_CHOICE = "(CLI default)"
-AUTO_MODEL = "<BlindPilot auto>"
-AUTO_MODEL_CHOICE = "Auto (choose for each task)"
 # Probing costs a CLI start-up, so results are reused for a while. Catalogs are
 # deliberately loaded only when /model or /models is opened, keeping normal
 # application startup fast and quiet.
@@ -515,26 +522,6 @@ PROBE_TTL_SECONDS = 900
 MODEL_REFRESH_MINUTES_DEFAULT = PROBE_TTL_SECONDS // 60
 MODEL_REFRESH_MINUTES_MIN = 0
 MODEL_REFRESH_MINUTES_MAX = 240
-
-
-def _keep_choice(current: str) -> str:
-    """First combo-box entry: pass no flag, and say what that currently means."""
-    current = _plain(current)
-    return f"{DEFAULT_CHOICE}, currently {current}" if current else DEFAULT_CHOICE
-
-
-@dataclass
-class ModelOptions:
-    """What a backend reports it can be asked for, plus what it is using now."""
-
-    models: List[str]
-    efforts: List[str]
-    current_model: str = ""  # display name, e.g. "Opus 5"
-    current_effort: str = ""  # e.g. "medium"
-    error: str = ""  # non-empty when the probe fell back to defaults
-    from_cache: bool = False  # served from a recent probe, not a fresh one
-    # alias -> the model it currently resolves to, e.g. "opus" -> "Opus 5.5".
-    labels: dict[str, str] = field(default_factory=dict)
 
 
 def _parse_model_aliases(text: str) -> List[str]:
@@ -575,12 +562,6 @@ def _parse_alias_target(text: str) -> str:
     """
     match = re.search(r"Set model to\s*`?([^`\n]+?)`?\s+for this session", text, re.I)
     return match.group(1).strip() if match else ""
-
-
-def _model_choice(model: str, labels: dict[str, str]) -> str:
-    """A model-box entry: the alias, plus the version it means when known."""
-    label = labels.get(model, "")
-    return f"{model}: {label}" if label and label.lower() != model.lower() else model
 
 
 def _resolve_claude_aliases(binary: str, aliases: List[str], cwd: Optional[str]) -> dict:
@@ -2308,11 +2289,6 @@ def _app_icon_path() -> Path:
     return Path(_resource_dir()) / "packaging" / "BlindPilot.ico"
 
 
-def _plain(text: str) -> str:
-    """Text for a label or a list entry, with markdown backticks taken out."""
-    return text.replace("`", "")
-
-
 def _faster_wav(path: str, factor: float) -> str:
     """A copy of a WAV that plays ``factor`` times faster, so higher.
 
@@ -3605,126 +3581,6 @@ class AgentFileList(wx.Dialog):
             self._end(wx.ID_DELETE)
         else:
             event.Skip()
-
-
-class ModelDialog(wx.Dialog):
-    """Model picker for /model: one combo box for the model, one for effort.
-
-    Both lists come from the probe that ran just before this opened, so the
-    choices are whatever the selected backend actually accepts. The first entry
-    in each box names what that backend is using right now -- picking it passes
-    nothing at all, so it keeps that. The model box is editable so a full model
-    ID can be typed; the effort box is a fixed list. Esc cancels.
-
-    A backend that takes no effort level gets an empty list for it, so the box
-    offers only "leave it alone" rather than a control the turn would ignore.
-    """
-
-    def __init__(
-        self,
-        parent: wx.Window,
-        options: "ModelOptions",
-        selected_model: str,
-        selected_effort: str,
-        backend_name: str = "CLI",
-        allow_auto_model: bool = False,
-    ):
-        super().__init__(parent, title="Model")
-
-        current = _plain(options.current_model) or "unknown"
-        if options.current_effort:
-            current = f"{current}, effort {_plain(options.current_effort)}"
-        lines = [f"{backend_name} reports the current model as: {current}."]
-        if selected_model or selected_effort:
-            lines.append(
-                "This tab overrides that with: "
-                f"model {'automatic routing' if selected_model == AUTO_MODEL else selected_model or 'unchanged'}, "
-                f"effort {selected_effort or 'unchanged'}."
-            )
-        if options.error:
-            lines.append(options.error)
-        if allow_auto_model:
-            lines.append("Auto may switch providers, including free models, for each task.")
-        summary = wx.StaticText(self, label="\n".join(lines))
-        summary.Wrap(self.FromDIP(520))
-
-        # "Leave it alone" is the first entry in both boxes, and it says what
-        # leaving it alone actually means rather than just "(CLI default)".
-        self._model_keep = _keep_choice(options.current_model)
-        # Each alias is shown with the version it resolves to, "opus: Opus 5.5",
-        # and mapped back to the bare alias when picked.
-        self._model_by_choice = {_model_choice(m, options.labels): m for m in options.models}
-        if allow_auto_model:
-            self._model_by_choice[AUTO_MODEL_CHOICE] = AUTO_MODEL
-        self._effort_keep = _keep_choice(options.current_effort)
-
-        model_label = wx.StaticText(self, label="&Model:")
-        self.model_box = wx.ComboBox(
-            self,
-            choices=[self._model_keep, *self._model_by_choice],
-            style=wx.CB_DROPDOWN,
-        )
-        self.model_box.SetName("Model")
-        self.model_box.SetValue(
-            (
-                AUTO_MODEL_CHOICE
-                if selected_model == AUTO_MODEL and allow_auto_model
-                else _model_choice(selected_model, options.labels)
-                if selected_model
-                else self._model_keep
-            )
-        )
-
-        efforts = list(options.efforts)
-        if selected_effort and selected_effort not in efforts:
-            # Kept as a choice. A read-only box cannot show a value it does not
-            # list, so OK would have silently cleared this tab's override.
-            efforts.append(selected_effort)
-        effort_label = wx.StaticText(self, label="&Effort:")
-        self.effort_box = wx.ComboBox(
-            self,
-            choices=[self._effort_keep, *efforts],
-            style=wx.CB_DROPDOWN | wx.CB_READONLY,
-        )
-        self.effort_box.SetName("Effort")
-        self.effort_box.SetStringSelection(selected_effort or self._effort_keep)
-
-        grid = wx.FlexGridSizer(2, 2, self.FromDIP(PAD), self.FromDIP(PAD))
-        grid.AddGrowableCol(1, 1)
-        grid.Add(model_label, 0, wx.ALIGN_CENTER_VERTICAL)
-        grid.Add(self.model_box, 1, wx.EXPAND)
-        grid.Add(effort_label, 0, wx.ALIGN_CENTER_VERTICAL)
-        grid.Add(self.effort_box, 1, wx.EXPAND)
-
-        buttons = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
-
-        pad = self.FromDIP(PAD_DIALOG)
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(summary, 0, wx.ALL, pad)
-        sizer.Add(grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
-        if buttons is not None:
-            sizer.Add(buttons, 0, wx.EXPAND | wx.ALL, pad)
-        self.SetSizerAndFit(sizer)
-
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
-        self.model_box.SetFocus()
-        self.CentreOnParent()
-
-    def _on_key(self, event: wx.KeyEvent) -> None:
-        if event.GetKeyCode() == wx.WXK_ESCAPE:
-            self.EndModal(wx.ID_CANCEL)
-            return
-        event.Skip()
-
-    def selection(self) -> tuple[str, str]:
-        """(model, effort), with "" for either one left as the backend has it."""
-        model = self.model_box.GetValue().strip()
-        model = self._model_by_choice.get(model, model)
-        effort = self.effort_box.GetValue().strip()
-        return (
-            "" if model in (DEFAULT_CHOICE, self._model_keep) else model,
-            "" if effort in (DEFAULT_CHOICE, self._effort_keep) else effort,
-        )
 
 
 # What a subagent the list shows is doing: its name, where it stands, and its
