@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import wx
 
 import blindpilot_app as app
+import main_frame
 import session_panel
 from conversation_items import ConversationItemsDialog, collect_items, can_open_link
 from markdown_rows import parse_response, Row
@@ -183,6 +184,7 @@ def test_browser_can_read_the_current_stream_without_waiting_for_completion(monk
 def test_chat_routes_user_and_assistant_messages_without_thinking(monkeypatch):
     calls = []
     monkeypatch.setattr(app, "_show_conversation_items", lambda *args: calls.append(args))
+    monkeypatch.setattr(main_frame, "_show_conversation_items", lambda *args: calls.append(args))
     panel = SimpleNamespace(
         history_entries=[
             SimpleNamespace(role=role, content=role) for role in ("user", "thinking", "assistant")

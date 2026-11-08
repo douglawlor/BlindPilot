@@ -19,6 +19,8 @@ import time
 import pytest
 
 import blindpilot_app as app
+import main_frame
+import app_shell
 import conversation_search
 import new_session_dialog
 from session_history import HistoryEntry, HistoryTurn
@@ -178,8 +180,10 @@ def search_ui(monkeypatch, wx_app):
     monkeypatch.setattr(app.wx, "TextEntryDialog", _Ask)
     monkeypatch.setattr(app.wx, "ProgressDialog", _Progress)
     monkeypatch.setattr(app, "ConversationItemsDialog", _ItemsDialog)
+    monkeypatch.setattr(main_frame, "ConversationItemsDialog", _ItemsDialog)
     spoken: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, *_a, **_k: spoken.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, *_a, **_k: spoken.append(text))
     frame = type("FrameStub", (), {})()
     frame.spoken = spoken
     frame._find_all_range = lambda *args: app.MainFrame._find_all_range(frame, *args)
@@ -208,6 +212,7 @@ def test_all_conversation_search_returns_before_the_scan_finishes(search_ui, mon
         return entries
 
     monkeypatch.setattr(app, "list_history", list_history)
+    monkeypatch.setattr(main_frame, "list_history", list_history)
     monkeypatch.setattr(
         conversation_search,
         "load_turns",
@@ -249,6 +254,7 @@ def test_cancelling_the_search_stops_the_scan_and_says_so(search_ui, monkeypatch
         return [HistoryTurn(prompt="needle")]
 
     monkeypatch.setattr(app, "list_history", list_history)
+    monkeypatch.setattr(main_frame, "list_history", list_history)
     monkeypatch.setattr(conversation_search, "load_turns", load_turns)
 
     app.MainFrame._find_in_all_conversations(search_ui)
@@ -312,6 +318,7 @@ class _Panel:
 def frame(monkeypatch):
     spoken: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, *a, **k: spoken.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, *a, **k: spoken.append(text))
     stub = type("FrameStub", (), {})()
     stub.spoken = spoken
     stub._relay_speaker = lambda panel: app.MainFrame._relay_speaker(stub, panel)
@@ -412,8 +419,12 @@ def test_a_reply_ending_in_done_ends_the_conversation(frame):
 def test_recent_folders_are_newest_first_without_duplicates(monkeypatch):
     stored: dict = {}
     monkeypatch.setattr(app, "_load_config", lambda: dict(stored))
+    monkeypatch.setattr(main_frame, "_load_config", lambda: dict(stored))
+    monkeypatch.setattr(app_shell, "_load_config", lambda: dict(stored))
     monkeypatch.setattr(new_session_dialog, "_load_config", lambda: dict(stored))
+    monkeypatch.setattr(app_shell, "_save_config", lambda cfg: stored.update(cfg) or True)
     monkeypatch.setattr(app, "_save_config", lambda cfg: stored.update(cfg) or True)
+    monkeypatch.setattr(main_frame, "_save_config", lambda cfg: stored.update(cfg) or True)
 
     app._remember_folder("C:/one")
     app._remember_folder("C:/two")

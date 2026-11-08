@@ -5,6 +5,7 @@ import threading
 import time
 
 import blindpilot_app as app
+import main_frame
 import session_history
 import wx
 from test_tab_strip_focus import _frame, _running_app
@@ -34,6 +35,7 @@ def test_resume_returns_before_slow_transcript_load_and_opens_when_ready(monkeyp
                 return [session_history.HistoryTurn("Question", "Answer")]
 
             monkeypatch.setattr(app, "load_turns", slow_load)
+            monkeypatch.setattr(main_frame, "load_turns", slow_load)
             before = time.monotonic()
             result = frame._resume_history(entry)
             elapsed = time.monotonic() - before
@@ -73,6 +75,7 @@ def test_cancelled_history_load_does_not_open_a_tab(monkeypatch, tmp_path):
                 return [session_history.HistoryTurn("Question", "Answer")]
 
             monkeypatch.setattr(app, "load_turns", slow_load)
+            monkeypatch.setattr(main_frame, "load_turns", slow_load)
             frame._resume_history(entry)
             _wait(started.is_set)
             progress = frame._history_open_progress

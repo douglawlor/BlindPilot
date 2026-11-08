@@ -26,6 +26,7 @@ import contextlib
 import wx
 
 import blindpilot_app
+import main_frame
 import chat_integration
 
 
@@ -50,7 +51,9 @@ def _running_app():
 def _frame(monkeypatch, tmp_path):
     saved: dict[str, object] = {"setup_complete": True, "app_mode": "agent"}
     monkeypatch.setattr(blindpilot_app, "_load_config", lambda: dict(saved))
+    monkeypatch.setattr(main_frame, "_load_config", lambda: dict(saved))
     monkeypatch.setattr(blindpilot_app, "_save_config", lambda value: saved.update(value))
+    monkeypatch.setattr(main_frame, "_save_config", lambda value: saved.update(value))
     monkeypatch.setattr(chat_integration, "database_path", lambda: tmp_path / "chat.sqlite3")
     monkeypatch.setattr(chat_integration, "import_existing_accessible_ai_data", lambda _t: None)
     return blindpilot_app.MainFrame(str(tmp_path))
@@ -65,6 +68,7 @@ def test_arrowing_the_strip_leaves_focus_on_the_strip(monkeypatch, tmp_path):
 
             spoken: list[str] = []
             monkeypatch.setattr(blindpilot_app, "announce", lambda text: spoken.append(text))
+            monkeypatch.setattr(main_frame, "announce", lambda text: spoken.append(text))
             strip_focus: list[str] = []
             frame.tab_switcher.SetFocus = lambda: strip_focus.append("strip")
             # Where focus actually is cannot be read back on a headless runner,
@@ -106,6 +110,7 @@ def test_switching_sessions_from_elsewhere_still_lands_in_the_conversation(monke
             wx.Yield()
             spoken: list[str] = []
             monkeypatch.setattr(blindpilot_app, "announce", lambda text: spoken.append(text))
+            monkeypatch.setattr(main_frame, "announce", lambda text: spoken.append(text))
             monkeypatch.setattr(
                 type(frame), "_focus_is_within", staticmethod(lambda focus, control: False)
             )

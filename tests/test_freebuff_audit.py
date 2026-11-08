@@ -314,12 +314,23 @@ def test_freebuff_prewarm_defers_cli_discovery_and_discards_stale_result(monkeyp
 
 def test_desktop_history_opens_for_reading_without_a_cli_session(monkeypatch, wx_app):
     import blindpilot_app as app
+    import main_frame
 
     entry = history.HistoryEntry("freebuff", "desktop", "Desktop chat", "desktop-v2.db", 1)
     monkeypatch.setattr(app, "load_turns", lambda _: [history.HistoryTurn("Question", "Answer")])
+    monkeypatch.setattr(
+        main_frame, "load_turns", lambda _: [history.HistoryTurn("Question", "Answer")]
+    )
     viewed = []
     monkeypatch.setattr(
         app,
+        "ReadView",
+        lambda _parent, text, title: SimpleNamespace(
+            ShowModal=lambda: viewed.append((text, title)), Destroy=lambda: None
+        ),
+    )
+    monkeypatch.setattr(
+        main_frame,
         "ReadView",
         lambda _parent, text, title: SimpleNamespace(
             ShowModal=lambda: viewed.append((text, title)), Destroy=lambda: None

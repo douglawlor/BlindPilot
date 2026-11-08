@@ -15,6 +15,7 @@ import contextlib
 import wx
 
 import blindpilot_app
+import main_frame
 import chat_integration
 
 
@@ -32,7 +33,9 @@ def _running_app():
 def _frame(monkeypatch, tmp_path, mode: str):
     saved: dict[str, object] = {"setup_complete": True, "app_mode": mode}
     monkeypatch.setattr(blindpilot_app, "_load_config", lambda: dict(saved))
+    monkeypatch.setattr(main_frame, "_load_config", lambda: dict(saved))
     monkeypatch.setattr(blindpilot_app, "_save_config", lambda value: saved.update(value))
+    monkeypatch.setattr(main_frame, "_save_config", lambda value: saved.update(value))
     monkeypatch.setattr(chat_integration, "database_path", lambda: tmp_path / "chat.sqlite3")
     monkeypatch.setattr(chat_integration, "import_existing_accessible_ai_data", lambda _t: None)
     return blindpilot_app.MainFrame(str(tmp_path))

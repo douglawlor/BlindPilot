@@ -16,6 +16,7 @@ import wave
 import wx
 
 import blindpilot_app
+import main_frame
 from test_tab_strip_focus import _frame, _running_app
 
 
@@ -48,6 +49,7 @@ def test_tabs_keep_their_backend_and_say_it_once_mixed(monkeypatch, tmp_path):
             wx.Yield()
             spoken: list[str] = []
             monkeypatch.setattr(blindpilot_app, "announce", lambda text: spoken.append(text))
+            monkeypatch.setattr(main_frame, "announce", lambda text: spoken.append(text))
             monkeypatch.setattr(
                 type(frame), "_focus_is_within", staticmethod(lambda focus, control: False)
             )

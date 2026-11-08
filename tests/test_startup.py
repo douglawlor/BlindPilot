@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 import os
 
+import main_frame
+
 
 @pytest.fixture(autouse=True)
 def _startup_check_flag_does_not_leak():
@@ -12,12 +14,16 @@ def _startup_check_flag_does_not_leak():
     right for a check that then exits and wrong for a test file where the next
     test is an ordinary launch. Put back whatever it was."""
     import blindpilot_app
+    import main_frame
+    import session_panel
 
     before = blindpilot_app._STARTUP_CHECK
     try:
         yield
     finally:
         blindpilot_app._STARTUP_CHECK = before
+        main_frame._STARTUP_CHECK = before
+        session_panel._STARTUP_CHECK = before
 
 
 def test_linux_announcements_are_sent_to_orca_without_moving_focus(monkeypatch):
@@ -89,10 +95,13 @@ def test_gui_startup_smoke_skips_first_run_wizard(monkeypatch):
     saved: list[dict] = []
     monkeypatch.setattr(blindpilot_app.sys, "argv", ["blind_pilot.py", "--startup-gui-smoke"])
     monkeypatch.setattr(blindpilot_app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     # Startup moves an old config onto full auto, and that writes. Without this
     # the test would write to the config of whoever ran it.
     monkeypatch.setattr(blindpilot_app, "_save_config", lambda cfg: saved.append(dict(cfg)))
+    monkeypatch.setattr(main_frame, "_save_config", lambda cfg: saved.append(dict(cfg)))
     monkeypatch.setattr(blindpilot_app, "SetupWizard", fail_if_wizard_opens)
+    monkeypatch.setattr(main_frame, "SetupWizard", fail_if_wizard_opens)
     monkeypatch.setattr(blindpilot_app, "MainFrame", FakeFrame)
     monkeypatch.setattr(blindpilot_app, "_bring_to_front", lambda: events.append("front"))
     monkeypatch.setattr(blindpilot_app.wx, "App", lambda _redirect: FakeApp())
@@ -216,7 +225,9 @@ def test_a_startup_check_does_not_take_focus_from_whoever_is_working(monkeypatch
 
     monkeypatch.setattr(blindpilot_app.sys, "argv", ["blind_pilot.py", "--startup-gui-smoke"])
     monkeypatch.setattr(blindpilot_app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     monkeypatch.setattr(blindpilot_app, "_save_config", lambda _cfg: None)
+    monkeypatch.setattr(main_frame, "_save_config", lambda _cfg: None)
     monkeypatch.setattr(blindpilot_app, "MainFrame", FakeFrame)
     monkeypatch.setattr(blindpilot_app, "_bring_to_front", lambda: events.append("front"))
     monkeypatch.setattr(blindpilot_app.wx, "App", lambda _redirect: FakeApp())
@@ -285,7 +296,9 @@ def test_the_configured_appearance_is_applied_before_any_window_exists(monkeypat
 
     monkeypatch.setattr(blindpilot_app.sys, "argv", ["blind_pilot.py", "--startup-gui-smoke"])
     monkeypatch.setattr(blindpilot_app, "_load_config", lambda: {"appearance": "dark"})
+    monkeypatch.setattr(main_frame, "_load_config", lambda: {"appearance": "dark"})
     monkeypatch.setattr(blindpilot_app, "_save_config", lambda cfg: None)
+    monkeypatch.setattr(main_frame, "_save_config", lambda cfg: None)
     monkeypatch.setattr(blindpilot_app, "MainFrame", FakeFrame)
     monkeypatch.setattr(blindpilot_app, "_bring_to_front", lambda: None)
     monkeypatch.setattr(blindpilot_app.wx, "App", FakeApp)

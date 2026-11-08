@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 
 import blindpilot_app as app
+import main_frame
 from blocking_contract import BlockedTheGuiThread, _GUARDED, gui_thread_may_not_block
 
 
@@ -72,6 +73,7 @@ def test_callafter_and_calllater_are_measured(monkeypatch):
         return action
 
     monkeypatch.setattr(app, "_gui_work", measured)
+    monkeypatch.setattr(main_frame, "_gui_work", measured)
     monkeypatch.setattr(app, "_ORIGINAL_CALL_AFTER", lambda callback: scheduled.append(callback))
     monkeypatch.setattr(
         app,

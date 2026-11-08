@@ -28,6 +28,7 @@ import logging
 import pytest
 
 import blindpilot_app as app
+import main_frame
 import history_dialog
 import remote_hermes_dialog
 import app_config
@@ -240,10 +241,12 @@ def test_renaming_a_conversation_that_cannot_be_saved_says_so(unwritable, monkey
     rename never reached, and the success sentence would claim a name the
     file does not hold."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     monkeypatch.setattr(history_dialog, "_load_config", dict)
     monkeypatch.setattr(app.wx, "TextEntryDialog", lambda *a, **k: _Entry("Renamed"))
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
     monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
     dialog = _history_dialog()
 
@@ -259,10 +262,12 @@ def test_renaming_a_conversation_that_saves_announces_the_new_name(
 ):
     config_at(tmp_path / "config.json")
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     monkeypatch.setattr(history_dialog, "_load_config", dict)
     monkeypatch.setattr(app.wx, "TextEntryDialog", lambda *a, **k: _Entry("Renamed"))
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
     monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
     dialog = _history_dialog()
 
@@ -276,9 +281,11 @@ def test_hiding_a_conversation_that_cannot_be_saved_says_so(unwritable, monkeypa
     """The hidden set the list reads goes back the way it was, so the
     conversation is not hidden by a save that never happened."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     monkeypatch.setattr(history_dialog, "_load_config", dict)
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
     monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
     dialog = _history_dialog()
 
@@ -335,6 +342,7 @@ def test_applying_preferences_that_cannot_be_saved_says_so(
 def test_the_helper_announces_a_write_the_file_refused(unwritable, monkeypatch):
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
     monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
 
     assert app._save_or_announce({"setup_complete": True}) is False
@@ -345,6 +353,7 @@ def test_the_helper_stays_quiet_when_the_write_lands(config_at, tmp_path, monkey
     config_at(tmp_path / "config.json")
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
     monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
 
     assert app._save_or_announce({"backend": "codex"}) is True
@@ -357,9 +366,11 @@ def test_changing_the_sort_that_cannot_be_saved_says_so(unwritable, monkeypatch)
     refuses it, and the conversation count that follows must not be the
     only thing the user hears."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     monkeypatch.setattr(history_dialog, "_load_config", dict)
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
     monkeypatch.setattr(history_dialog, "announce", lambda text, urgent=False: said.append(text))
     refreshed: list[bool] = []
 
@@ -420,6 +431,7 @@ def _mode_frame():
 
 def test_switching_mode_when_the_file_refuses_says_so(unwritable, monkeypatch):
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     frame = _mode_frame()
 
     app.MainFrame._set_app_mode(frame, app.APP_MODE_AGENT)
@@ -432,6 +444,7 @@ def test_a_startup_mode_restore_stays_quiet_over_a_refused_file(unwritable, monk
     runs before the window is on screen, where an error would talk over
     whoever is starting the application."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     frame = _mode_frame()
 
     app.MainFrame._set_app_mode(frame, app.APP_MODE_AGENT, announce_change=False)
@@ -445,10 +458,16 @@ def test_changing_the_mode_says_what_it_does_then_the_refusal(unwritable, monkey
     refusal is that it will not survive a restart. The refusal goes last so
     it is not followed by anything that sounds like success."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     monkeypatch.setattr(history_dialog, "_load_config", dict)
     events: list[tuple[str, str]] = []
     monkeypatch.setattr(
         app,
+        "announce",
+        lambda text, urgent=False: events.append(("said", text)),
+    )
+    monkeypatch.setattr(
+        main_frame,
         "announce",
         lambda text, urgent=False: events.append(("said", text)),
     )
@@ -482,6 +501,7 @@ def test_a_projects_folder_that_cannot_be_saved_is_reported_after_the_backend(
     ending on "Backend changed to Codex" would leave the user believing the
     whole setup was stored."""
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
 
     class _Wizard:
         def __init__(self, *_args, **_kwargs):
@@ -495,6 +515,7 @@ def test_a_projects_folder_that_cannot_be_saved_is_reported_after_the_backend(
             pass
 
     monkeypatch.setattr(app, "SetupWizard", _Wizard)
+    monkeypatch.setattr(main_frame, "SetupWizard", _Wizard)
     events: list[str] = []
     frame = type(
         "ManageStub",
@@ -556,7 +577,9 @@ def test_applying_the_remote_address_carries_the_save_answer(monkeypatch):
 
 def test_a_remote_address_that_cannot_be_saved_says_so_not_the_connection(unwritable, monkeypatch):
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     monkeypatch.setattr(app, "invalidate_model_options", lambda *_a, **_k: None)
+    monkeypatch.setattr(main_frame, "invalidate_model_options", lambda *_a, **_k: None)
 
     class _Dialog:
         def __init__(self, *_args, **_kwargs):
@@ -572,8 +595,10 @@ def test_a_remote_address_that_cannot_be_saved_says_so_not_the_connection(unwrit
             pass
 
     monkeypatch.setattr(app, "RemoteHermesDialog", _Dialog)
+    monkeypatch.setattr(main_frame, "RemoteHermesDialog", _Dialog)
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
 
     app.MainFrame._configure_remote_hermes(type("FrameStub", (), {})())
 
@@ -584,6 +609,7 @@ def test_a_remote_address_that_saves_describes_the_connection(monkeypatch):
     """The other half of the guard: a write that works still says where
     Hermes will be found."""
     monkeypatch.setattr(app, "invalidate_model_options", lambda *_a, **_k: None)
+    monkeypatch.setattr(main_frame, "invalidate_model_options", lambda *_a, **_k: None)
 
     class _Dialog:
         def __init__(self, *_args, **_kwargs):
@@ -599,8 +625,10 @@ def test_a_remote_address_that_saves_describes_the_connection(monkeypatch):
             pass
 
     monkeypatch.setattr(app, "RemoteHermesDialog", _Dialog)
+    monkeypatch.setattr(main_frame, "RemoteHermesDialog", _Dialog)
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
 
     app.MainFrame._configure_remote_hermes(type("FrameStub", (), {})())
 
@@ -635,8 +663,10 @@ def test_a_key_write_that_fails_is_spoken_once_like_any_other_save_failure(
         staticmethod(lambda: key_blocker / "remote-hermes-key"),
     )
     monkeypatch.setattr(app, "invalidate_model_options", lambda *_a, **_k: None)
+    monkeypatch.setattr(main_frame, "invalidate_model_options", lambda *_a, **_k: None)
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
 
     class _Dialog(type(_remote_fields())):
         def __init__(self, *_args, **_kwargs):
@@ -652,6 +682,7 @@ def test_a_key_write_that_fails_is_spoken_once_like_any_other_save_failure(
             return real_apply(self)
 
     monkeypatch.setattr(app, "RemoteHermesDialog", _Dialog)
+    monkeypatch.setattr(main_frame, "RemoteHermesDialog", _Dialog)
 
     # The settings write lands; only the key file refuses. The refusal is
     # still the sentence the caller speaks, not a success that drops the key.

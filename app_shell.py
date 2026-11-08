@@ -22,13 +22,22 @@ from accessible_ai.storage.paths import bundle_dir as _mac_bundle_dir
 
 import screen_speech
 from screen_speech import announce
-from agent_backends import BACKEND_LABELS, blindpilot_data_dir
-from app_config import APPEARANCE_DARK, APPEARANCE_LIGHT, _save_config, _valid_appearance
-from session_panel import PROBE_TTL_SECONDS
+from agent_backends import BACKEND_LABELS, backend_label, blindpilot_data_dir
+from app_config import (
+    APPEARANCE_DARK,
+    APPEARANCE_LIGHT,
+    SETTINGS,
+    _load_config,
+    _save_config,
+    _valid_appearance,
+)
+from new_session_dialog import _recent_folders
+from session_panel import DEFAULT_PERMISSION_MODE, PROBE_TTL_SECONDS
 from process_utils import no_window_kwargs
 
 
 APP_NAME = "BlindPilot"
+APP_VERSION = "0.55.12"
 
 
 PAD = 8
@@ -364,3 +373,49 @@ def _destroy_other_top_level_windows(keep: wx.Window) -> None:
                 window.Destroy()
             except Exception:
                 pass
+
+
+def adopt_full_auto_default(config: dict) -> bool:
+    """Move a config written before full-auto was the default onto it.
+
+    Returns whether ``config`` was changed. Only a mode saved by an older
+    BlindPilot is moved: once this has run, a mode chosen in the picker is
+    the user's and is left exactly where they put it.
+    """
+    if config.get("permission_default") == DEFAULT_PERMISSION_MODE:
+        return False
+    config["permission_default"] = DEFAULT_PERMISSION_MODE
+    config["permission_mode"] = DEFAULT_PERMISSION_MODE
+    return True
+
+
+_RECENT_FOLDERS_KEPT = 15
+
+
+def _remember_folder(path: str) -> None:
+    folders = [f for f in _recent_folders() if os.path.normcase(f) != os.path.normcase(path)]
+    cfg = _load_config()
+    cfg["recent_folders"] = [path, *folders][:_RECENT_FOLDERS_KEPT]
+    _save_config(cfg)
+
+
+def bug_report_facts(backend: str, app_mode: str) -> str:
+    """What a bug report carries besides your words. Never a prompt, an
+    answer, a folder or a file name: only versions and settings."""
+    return "\n".join(
+        [
+            f"BlindPilot: {APP_VERSION}",
+            f"System: {platform.platform()}",
+            f"Python: {platform.python_version()}",
+            f"wxPython: {wx.version()}",
+            f"Mode: {app_mode}",
+            # Chat mode talks to a provider API; no agent backend is in use.
+            "Backend: none, Chat mode"
+            if app_mode == APP_MODE_CHAT
+            else f"Backend: {backend_label(backend)}",
+            f"Narration: {SETTINGS.narration}",
+            f"Live activity: {SETTINGS.live_rows}, spoken: {SETTINGS.speak_live}",
+            f"Responses as text field: {SETTINGS.text_view}",
+            f"Screen reader output: {_speech_route()}",
+        ]
+    )

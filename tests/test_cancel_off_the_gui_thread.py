@@ -25,6 +25,7 @@ import time
 
 
 import blindpilot_app as app
+import main_frame
 from doubles import panel_stub
 
 
@@ -98,6 +99,7 @@ def test_the_close_handler_uses_the_non_blocking_form(monkeypatch):
     monkeypatch.setattr(_Page, "cancel_worker", lambda self, wait=True: waits.append(wait))
 
     monkeypatch.setattr(app, "SessionPanel", _Page)
+    monkeypatch.setattr(main_frame, "SessionPanel", _Page)
     frame = type("FrameStub", (), {})()
     page = _panel(_Worker())
     frame.notebook = type(
@@ -121,6 +123,7 @@ def test_the_close_handler_uses_the_non_blocking_form(monkeypatch):
 # ----- quitting -----
 def test_quitting_cancels_every_tab(monkeypatch):
     monkeypatch.setattr(app, "SessionPanel", _Page)
+    monkeypatch.setattr(main_frame, "SessionPanel", _Page)
     workers = [_Worker(delay=0.05) for _ in range(3)]
     pages = [_panel(worker) for worker in workers]
     frame = _frame_with(pages)
@@ -135,6 +138,7 @@ def test_quitting_does_not_take_three_seconds_per_tab(monkeypatch):
     """One shared budget: the tabs are cancelled at the same time, not in a
     queue behind each other."""
     monkeypatch.setattr(app, "SessionPanel", _Page)
+    monkeypatch.setattr(main_frame, "SessionPanel", _Page)
     workers = [_Worker(delay=0.4) for _ in range(4)]
     pages = [_panel(worker) for worker in workers]
     frame = _frame_with(pages)
@@ -172,6 +176,7 @@ def _frame_with(pages):
 
 def test_quitting_still_closes_the_window(monkeypatch):
     monkeypatch.setattr(app, "SessionPanel", _Page)
+    monkeypatch.setattr(main_frame, "SessionPanel", _Page)
     frame = _frame_with([_panel(_Worker(delay=0.01))])
     event = _CloseEvent()
 

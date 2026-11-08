@@ -8,6 +8,7 @@ dialog, and the report then enabled a button whose C++ object was gone.
 from __future__ import annotations
 
 import blindpilot_app as app
+import main_frame
 
 
 class _Dead:
@@ -21,6 +22,7 @@ class _Dead:
 def test_the_result_of_a_test_arriving_after_escape_is_dropped(monkeypatch):
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
 
     app.RemoteHermesDialog._test_done(_Dead(), "")
     app.RemoteHermesDialog._test_done(_Dead(), "refused")

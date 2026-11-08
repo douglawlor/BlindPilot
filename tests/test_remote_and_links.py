@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import main_frame
 import session_panel
 import history_dialog  # noqa: E402
 import remote_sessions as rs
@@ -167,6 +168,7 @@ def test_a_link_from_a_second_copy_is_handed_over_and_taken_once(tmp_path, monke
 def test_a_link_only_ever_reopens_a_conversation(monkeypatch):
     spoken: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, *a, **k: spoken.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, *a, **k: spoken.append(text))
     stub = type("FrameStub", (), {})()
     stub._session_panels = list
     app.MainFrame.open_session_link(stub, "blindpilot://open/nosuch/abc")

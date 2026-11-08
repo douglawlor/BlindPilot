@@ -11,6 +11,7 @@ import pytest
 
 import app_config
 import blindpilot_app as app
+import main_frame
 from doubles import Earcons
 
 wx = pytest.importorskip("wx")
@@ -196,7 +197,9 @@ def test_the_interval_is_only_editable_for_the_periodic_cue(wx_app):
 def test_applying_the_dialog_updates_the_settings_and_the_menus(wx_app, monkeypatch):
     saved: list[dict] = []
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     monkeypatch.setattr(app, "_save_config", lambda cfg: saved.append(dict(cfg)) or True)
+    monkeypatch.setattr(main_frame, "_save_config", lambda cfg: saved.append(dict(cfg)) or True)
     monkeypatch.setattr(app_config, "_load_config", dict)
     monkeypatch.setattr(app_config, "_save_config", lambda cfg: saved.append(dict(cfg)) or True)
     frame = _FrameStub()
@@ -315,8 +318,11 @@ def test_changing_the_appearance_says_it_takes_effect_next_launch(wx_app, monkey
     waits for the next start and the person is told so, once."""
     spoken: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: spoken.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: spoken.append(text))
     monkeypatch.setattr(app, "_load_config", dict)
+    monkeypatch.setattr(main_frame, "_load_config", dict)
     monkeypatch.setattr(app, "_save_config", lambda cfg: True)
+    monkeypatch.setattr(main_frame, "_save_config", lambda cfg: True)
     monkeypatch.setattr(app_config, "_load_config", dict)
     monkeypatch.setattr(app_config, "_save_config", lambda cfg: True)
     app.SETTINGS.appearance = app.APPEARANCE_SYSTEM

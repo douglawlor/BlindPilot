@@ -6,6 +6,7 @@ import pytest
 import wx
 
 import blindpilot_app as app
+import main_frame
 import conversation_webview
 from session_history import HistoryEntry, HistoryTurn
 
@@ -18,8 +19,13 @@ def entry():
 @pytest.fixture
 def window(wx_app, monkeypatch, tmp_path):
     monkeypatch.setattr(app, "_load_config", lambda: {"app_mode": "agent", "backend": "claude"})
+    monkeypatch.setattr(
+        main_frame, "_load_config", lambda: {"app_mode": "agent", "backend": "claude"}
+    )
     monkeypatch.setattr(app, "_save_config", lambda _cfg: True)
+    monkeypatch.setattr(main_frame, "_save_config", lambda _cfg: True)
     monkeypatch.setattr(app, "announce", lambda *_a, **_k: None)
+    monkeypatch.setattr(main_frame, "announce", lambda *_a, **_k: None)
     monkeypatch.setattr(conversation_webview, "_modern_browser_available", lambda: False)
     monkeypatch.setattr(app.ConversationWebViewPanel, "_load_conversation", lambda _page: None)
     frame = app.MainFrame(str(tmp_path))
@@ -99,6 +105,7 @@ def test_deleted_reader_drops_late_load_results(window, entry, monkeypatch):
     assert page._closed
     spoken = []
     monkeypatch.setattr(app, "announce", spoken.append)
+    monkeypatch.setattr(main_frame, "announce", spoken.append)
     page._show_conversation([HistoryTurn("Late prompt", "Late answer")], "")
     assert spoken == []
 
@@ -110,6 +117,7 @@ def test_background_reader_load_does_not_speak_or_focus(window, entry, monkeypat
     wx.Yield()
     spoken, focused, content = [], [], []
     monkeypatch.setattr(app, "announce", spoken.append)
+    monkeypatch.setattr(main_frame, "announce", spoken.append)
     page._webview = SimpleNamespace(
         using_webview=True, set_content=content.append, focus=lambda: focused.append(True)
     )
@@ -127,6 +135,7 @@ def test_selecting_a_failed_reader_preserves_and_announces_its_error(window, ent
     page._show_conversation([], "This conversation could not be read.")
     spoken = []
     monkeypatch.setattr(app, "announce", spoken.append)
+    monkeypatch.setattr(main_frame, "announce", spoken.append)
     monkeypatch.setattr(conversation_webview, "announce", spoken.append)
     monkeypatch.setattr(type(window), "_focus_is_within", staticmethod(lambda *_a: False))
     window._jump_to_tab(1)
@@ -140,6 +149,7 @@ def test_frame_shutdown_invalidates_readers_before_native_destruction(window, en
     page = window._add_conversation_webview(entry)
     frame = SimpleNamespace(notebook=window.notebook, chat_panel=None, _session_panels=list)
     monkeypatch.setattr(app, "_destroy_other_top_level_windows", lambda _frame: None)
+    monkeypatch.setattr(main_frame, "_destroy_other_top_level_windows", lambda _frame: None)
     monkeypatch.setattr(app.backend_pool, "stop_all_held_processes", lambda: None)
     with monkeypatch.context() as patches:
         patches.setattr(wx, "GetApp", lambda: None)
@@ -221,8 +231,10 @@ def test_main_window_destroys_the_picker_before_opening_the_reader(
     )
     if kind == "history":
         monkeypatch.setattr(app, "HistoryDialog", lambda *_a, **_k: picker)
+        monkeypatch.setattr(main_frame, "HistoryDialog", lambda *_a, **_k: picker)
         window._open_history()
     else:
         monkeypatch.setattr(app, "HermesSessionsDialog", lambda *_a, **_k: picker)
+        monkeypatch.setattr(main_frame, "HermesSessionsDialog", lambda *_a, **_k: picker)
         window._open_hermes_sessions()
     assert steps == ["picker destroyed", "tab opened"]

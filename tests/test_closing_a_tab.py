@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import main_frame
 from doubles import panel_stub
 
 
@@ -111,6 +112,7 @@ def test_a_read_back_that_fires_on_a_destroyed_panel_does_nothing(monkeypatch):
     deferred callback checks that its panel is still there."""
     said: list[str] = []
     monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(main_frame, "announce", lambda text, urgent=False: said.append(text))
 
     class _Destroyed:
         # wxPython reports a destroyed window as falsey.

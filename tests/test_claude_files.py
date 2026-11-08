@@ -19,6 +19,7 @@ except ModuleNotFoundError:  # Python 3.10 remains supported; 3.12 CI checks TOM
     tomllib = None
 
 import blindpilot_app as app
+import main_frame
 
 
 def _write(path, text=""):
@@ -72,7 +73,9 @@ def test_agent_discovery_runs_on_worker_and_only_current_page_receives_it(monkey
         queued.set()
 
     monkeypatch.setattr(app, "agent_files", discover)
+    monkeypatch.setattr(main_frame, "agent_files", discover)
     monkeypatch.setattr(app, "_call_after_alive", enqueue)
+    monkeypatch.setattr(main_frame, "_call_after_alive", enqueue)
     monkeypatch.setattr(frame, "_show_agent_files", lambda *args: frame.shown.append(args))
     cwd = str(tmp_path)
 
@@ -93,12 +96,14 @@ def test_old_agent_discovery_cannot_fill_replaced_or_closed_page(monkeypatch, tm
     callbacks = []
     queued = threading.Event()
     monkeypatch.setattr(app, "agent_files", lambda _cwd: [])
+    monkeypatch.setattr(main_frame, "agent_files", lambda _cwd: [])
 
     def enqueue(callback, *args):
         callbacks.append((callback, args))
         queued.set()
 
     monkeypatch.setattr(app, "_call_after_alive", enqueue)
+    monkeypatch.setattr(main_frame, "_call_after_alive", enqueue)
     monkeypatch.setattr(frame, "_show_agent_files", lambda *args: frame.shown.append(args))
     cwd = str(tmp_path)
 
@@ -135,7 +140,9 @@ def test_agent_discovery_error_is_spoken_without_caching(monkeypatch, tmp_path, 
         queued.set()
 
     monkeypatch.setattr(app, "agent_files", fail)
+    monkeypatch.setattr(main_frame, "agent_files", fail)
     monkeypatch.setattr(app, "_call_after_alive", enqueue)
+    monkeypatch.setattr(main_frame, "_call_after_alive", enqueue)
     frame._load_agent_files(str(tmp_path), frame.page, 0)
     assert queued.wait(5)
     callback, args = callbacks.pop(0)
@@ -200,6 +207,7 @@ def test_agent_list_reuses_folder_cache_without_discovery(monkeypatch, tmp_path,
     frame._agent_files_cache[app.os.path.normcase(app.os.path.abspath(cwd))] = groups
     shown = []
     monkeypatch.setattr(app, "SessionPanel", Page)
+    monkeypatch.setattr(main_frame, "SessionPanel", Page)
     monkeypatch.setattr(frame, "_show_agent_files", lambda *args: shown.append(args))
     monkeypatch.setattr(frame, "_load_agent_files", lambda *_args: pytest.fail("cache missed"))
 

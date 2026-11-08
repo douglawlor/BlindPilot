@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import blindpilot_app as app
+import main_frame
 
 
 def test_shortcut_creation_runs_in_worker_and_reports_result(frame, monkeypatch):
@@ -23,7 +24,13 @@ def test_shortcut_creation_runs_in_worker_and_reports_result(frame, monkeypatch)
         app, "_call_after_alive", lambda callback, *args: callbacks.append((callback, args))
     )
     monkeypatch.setattr(
+        main_frame, "_call_after_alive", lambda callback, *args: callbacks.append((callback, args))
+    )
+    monkeypatch.setattr(
         app, "create_desktop_shortcut", lambda: "C:/Users/test/Desktop/BlindPilot.lnk"
+    )
+    monkeypatch.setattr(
+        main_frame, "create_desktop_shortcut", lambda: "C:/Users/test/Desktop/BlindPilot.lnk"
     )
     frame._desktop_shortcut_serial = 0
     frame._desktop_shortcut_running = False
@@ -55,7 +62,15 @@ def test_shortcut_creation_reports_worker_error(frame, monkeypatch):
         app, "_call_after_alive", lambda callback, *args: callbacks.append((callback, args))
     )
     monkeypatch.setattr(
+        main_frame, "_call_after_alive", lambda callback, *args: callbacks.append((callback, args))
+    )
+    monkeypatch.setattr(
         app, "create_desktop_shortcut", lambda: (_ for _ in ()).throw(OSError("PowerShell failed"))
+    )
+    monkeypatch.setattr(
+        main_frame,
+        "create_desktop_shortcut",
+        lambda: (_ for _ in ()).throw(OSError("PowerShell failed")),
     )
     monkeypatch.setattr(
         app.threading,
@@ -86,6 +101,7 @@ def test_shortcut_result_after_close_is_discarded(frame, monkeypatch):
     frame._session_panels = list
     frame._announce_setting = spoken.append
     monkeypatch.setattr(app, "_destroy_other_top_level_windows", lambda _frame: None)
+    monkeypatch.setattr(main_frame, "_destroy_other_top_level_windows", lambda _frame: None)
     monkeypatch.setattr(
         app.threading,
         "Thread",

@@ -20,6 +20,7 @@ import urllib.request
 import pytest
 
 import blindpilot_app as app
+import main_frame
 import session_panel
 from blocking_contract import BlockedTheGuiThread, drive, gui_thread_may_not_block, offences
 
@@ -86,6 +87,7 @@ def test_a_menu_item_is_bound_through_the_budget_wrapper(wx_app, monkeypatch):
         return action
 
     monkeypatch.setattr(app, "_gui_work", spy)
+    monkeypatch.setattr(main_frame, "_gui_work", spy)
     frame = wx.Frame(None)
     try:
         menu = wx.Menu()
@@ -106,6 +108,7 @@ def test_an_accelerator_is_bound_through_the_budget_wrapper(wx_app, monkeypatch)
         return action
 
     monkeypatch.setattr(app, "_gui_work", spy)
+    monkeypatch.setattr(main_frame, "_gui_work", spy)
     frame = wx.Frame(None)
     try:
         action = lambda: None  # noqa: E731 - the identity is what is asserted

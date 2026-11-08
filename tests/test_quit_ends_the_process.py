@@ -25,6 +25,7 @@ import threading
 import time
 
 import blindpilot_app as app
+import main_frame
 from doubles import panel_stub
 
 
@@ -113,6 +114,7 @@ def test_a_wx_that_cannot_list_its_windows_does_not_stop_quitting(monkeypatch):
 def test_quitting_takes_the_stray_window_and_ends_the_loop(monkeypatch):
     """The close handler, end to end against its new last steps."""
     monkeypatch.setattr(app, "SessionPanel", _Page)
+    monkeypatch.setattr(main_frame, "SessionPanel", _Page)
     pages = [panel_stub(_Page, _worker=_Worker())]
     frame = _frame_with(pages)
     stray = _Window()
@@ -147,6 +149,7 @@ def test_quit_closes_while_backend_cleanup_is_still_running(monkeypatch):
 
     monkeypatch.setattr(app.backend_pool, "stop_all_held_processes", slow_cleanup)
     monkeypatch.setattr(app, "SessionPanel", _Page)
+    monkeypatch.setattr(main_frame, "SessionPanel", _Page)
     frame = _frame_with([])
     monkeypatch.setattr(app.wx, "GetTopLevelWindows", lambda: [frame])
     monkeypatch.setattr(app.wx, "GetApp", lambda: None)

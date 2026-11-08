@@ -7,6 +7,7 @@ import time
 
 import agent_backends
 import blindpilot_app
+import main_frame
 import museai_backend
 import pytest
 import session_history
@@ -118,6 +119,7 @@ def test_discuss_prepares_main_chat_draft_and_preserves_another_tabs_prompt(monk
                     return wx.ID_OK
 
             monkeypatch.setattr(blindpilot_app, "MuseAiDialog", Discussion)
+            monkeypatch.setattr(main_frame, "MuseAiDialog", Discussion)
             frame._museai_active("feed")
             _wait(lambda: bool(loaded))
             panel = frame.notebook.GetCurrentPage()
