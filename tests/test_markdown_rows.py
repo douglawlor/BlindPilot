@@ -259,6 +259,16 @@ def test_release_remainder_skips_whitespace_only_tail():
     assert said == [" Bye"]
 
 
+def test_strip_noise_removes_symbols_and_leaves_plain_text_alone():
+    from markdown_rows import _strip_noise
+
+    assert _strip_noise("Status ✅ ready ⭐") == "Status  ready "
+    assert _strip_noise("plain text, no symbols") == "plain text, no symbols"
+    assert _strip_noise("") == ""
+    # A keycap sequence loses its combining mark, not the digit it decorates.
+    assert _strip_noise("press 1⃣ now") == "press 1 now"
+
+
 if __name__ == "__main__":
     import traceback
 
