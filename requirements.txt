@@ -3,8 +3,10 @@
 # configuration, Ubuntu 24.04 on CPython 3.12, which is what CI tests.
 # Supersedes the Dependabot bump in #90, which broke Linux for exactly
 # this reason. A future wxPython bump must update this asset name too.
+# The non-Linux line pins the same 4.3.2 the Linux wheel carries, so every
+# platform is tested and shipped on the one version, not whichever is newest.
 wxPython @ https://github.com/wxWidgets/Phoenix/releases/download/wxPython-4.3.2/wxpython-4.3.2+ubuntu2404-cp312-cp312-linux_x86_64.whl ; sys_platform == "linux"
-wxPython>=4.3.2 ; sys_platform != "linux"
+wxPython==4.3.2 ; sys_platform != "linux"
 httpx>=0.28.1
 # The root certificates a packaged build verifies against. It arrives with
 # httpx anyway, but `certificates.py` imports it by name: the frozen OpenSSL
@@ -12,7 +14,7 @@ httpx>=0.28.1
 # anybody else's computer, and this is what stands in.
 certifi>=2026.10.23
 markdown-it-py>=4.2.0
-<# The accessible web view a whole conversation is rendered in, so it can be
+# The accessible web view a whole conversation is rendered in, so it can be
 # read by heading in NVDA, JAWS and VoiceOver.
 wx-accessible-webview>=0.2.0
 pyobjc-framework-Cocoa>=13.0; sys_platform == "darwin"

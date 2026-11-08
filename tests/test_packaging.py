@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -71,3 +73,28 @@ def test_the_installer_shows_the_app_icon():
     relative = match.group(1).strip().replace("\\", "/")
     # Paths in the script are relative to the script, as LicenseFile already is.
     assert (INSTALLER.parent / relative).resolve().is_file()
+
+
+def test_requirements_txt_parses_and_wxpython_agrees_on_every_platform():
+    """CI installs requirements-build.txt, which includes this file, so a
+    line pip cannot parse (a stray "<" once turned a comment into one)
+    fails every install at once. And the Linux wheel and the non-Linux
+    pin must name the same wxPython, or platforms ship different GUIs."""
+    pytest.importorskip("packaging")
+    from packaging.requirements import Requirement
+
+    lines = [
+        line.strip()
+        for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    requirements = [Requirement(line) for line in lines]
+    wx_lines = [line for line in lines if line.lower().startswith("wxpython")]
+    assert len(wx_lines) == 2
+    versions = set()
+    for line in wx_lines:
+        match = re.search(r"4\.\d+\.\d+", line)
+        assert match is not None, line
+        versions.add(match.group(0))
+    assert len(versions) == 1, f"wxPython versions disagree: {wx_lines}"
+    assert any(req.name == "wxPython" for req in requirements)
