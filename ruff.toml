@@ -23,7 +23,7 @@ extend-exclude = ["docs"]
 #     holding 51 of them, which leaves the rule switched on and blind. Worse,
 #     BLE001 flags the three `except Exception` handlers added to report a
 #     crashed turn - the fix for the very bug this list was widened over.
-#   UP - 233 hits, all mechanical (Optional[X] -> X | None). Worth doing, but
-#     as a change of its own rather than buried in a lint config.
+#   UP was 860 hits, all mechanical (Optional[X] -> X | None and friends);
+#     done as a change of its own, and UP is in select below from then on.
 #   T20 - 15 hits, 14 of them `print` in a test file's own __main__ harness.
-select = ["E4", "E7", "E9", "F", "W", "B", "C4", "A", "RET", "PIE"]
+select = ["E4", "E7", "E9", "F", "W", "B", "C4", "A", "RET", "PIE", "UP"]

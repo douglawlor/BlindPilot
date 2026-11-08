@@ -96,8 +96,7 @@ class _FakeProc:
 
     def _watch(self, it):
         try:
-            for line in it:
-                yield line
+            yield from it
         finally:
             self.stdout_done = True
 

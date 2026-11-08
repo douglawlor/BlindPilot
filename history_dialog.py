@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import threading
 from dataclasses import replace
-from typing import List, Optional
 
 import wx
 
@@ -75,7 +74,7 @@ def _history_key(entry: HistoryEntry) -> str:
     return f"{entry.backend}:{entry.session_id}"
 
 
-def sort_history(entries: List[HistoryEntry], order: str, title) -> List[HistoryEntry]:
+def sort_history(entries: list[HistoryEntry], order: str, title) -> list[HistoryEntry]:
     """`entries` in one of `_HISTORY_SORTS`, newest first within a tie."""
     newest = sorted(entries, key=lambda e: e.modified, reverse=True)
     if order == "Oldest first":
@@ -104,7 +103,7 @@ def group_names(groups: dict[str, list[str]]) -> list[str]:
     return sorted({name for names in groups.values() for name in names}, key=str.casefold)
 
 
-def _last_exchange(turns: List[HistoryTurn], limit: int = 1200) -> str:
+def _last_exchange(turns: list[HistoryTurn], limit: int = 1200) -> str:
     """The last prompt and answer of a conversation, cut short for a preview."""
 
     def cut(text: str) -> str:
@@ -142,10 +141,10 @@ class HistoryDialog(wx.Dialog):
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
         self._cwd = cwd
-        self._entries: List[HistoryEntry] = []
-        self._shown: List[HistoryEntry] = []
-        self.entry: Optional[HistoryEntry] = None
-        self.webview_entry: Optional[HistoryEntry] = None
+        self._entries: list[HistoryEntry] = []
+        self._shown: list[HistoryEntry] = []
+        self.entry: HistoryEntry | None = None
+        self.webview_entry: HistoryEntry | None = None
         self._load_serial = 0
         self._loading = False
         self._load_error = ""
@@ -210,7 +209,7 @@ class HistoryDialog(wx.Dialog):
         self.preview = wx.TextCtrl(
             self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2, name="Last exchange"
         )
-        self._preview_for: Optional[HistoryEntry] = None
+        self._preview_for: HistoryEntry | None = None
         self._preview_timer = wx.CallLater(300, self._load_preview)
         self._preview_timer.Stop()
 
@@ -280,11 +279,11 @@ class HistoryDialog(wx.Dialog):
         self.CentreOnParent()
 
     # ----- Loading and filtering -----
-    def _selected_backend(self) -> Optional[str]:
+    def _selected_backend(self) -> str | None:
         value = self._backend_values[max(0, self.backend_picker.GetSelection())]
         return value or None
 
-    def _selected_cwd(self) -> Optional[str]:
+    def _selected_cwd(self) -> str | None:
         scope = _HISTORY_SCOPES[max(0, self.scope_picker.GetSelection())]
         return self._cwd if scope == "folder" else None
 
@@ -319,7 +318,7 @@ class HistoryDialog(wx.Dialog):
         threading.Thread(target=work, daemon=True).start()
 
     def _history_loaded(
-        self, serial: int, entries: List[HistoryEntry], error: str, warning: str = ""
+        self, serial: int, entries: list[HistoryEntry], error: str, warning: str = ""
     ) -> None:
         if not self or serial != self._load_serial:
             return
@@ -379,7 +378,7 @@ class HistoryDialog(wx.Dialog):
             parts.append(backend_label(entry.backend))
         return " — ".join(parts)
 
-    def _refresh(self, keep: Optional[HistoryEntry] = None) -> None:
+    def _refresh(self, keep: HistoryEntry | None = None) -> None:
         self._read_own_names()
         term = self.filter_box.GetValue().strip().lower()
         hidden = self._hidden() if not self.show_hidden.GetValue() else set()
@@ -475,7 +474,7 @@ class HistoryDialog(wx.Dialog):
         self.entry = replace(chosen, title=self._title(chosen))
         self.EndModal(wx.ID_OK)
 
-    def _current(self) -> Optional[HistoryEntry]:
+    def _current(self) -> HistoryEntry | None:
         selection = self.list_box.GetSelection()
         if selection == wx.NOT_FOUND or selection >= len(self._shown):
             announce("Error: Choose a conversation first")

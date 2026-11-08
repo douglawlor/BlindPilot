@@ -28,7 +28,7 @@ import sys
 import threading
 import urllib.request
 from contextlib import contextmanager
-from typing import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 
 STARTED_A_PROCESS = "started a process"
 WAITED_FOR_A_PROCESS = "waited for a process to end"

@@ -15,7 +15,8 @@ calls are patched here, where the calls are made from.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, cast
+from typing import cast
+from collections.abc import Callable
 
 import wx
 
@@ -34,7 +35,7 @@ PAD_DIALOG = 12
 class MuseAiDialog(wx.Dialog):
     """Native readers for Muse.ai account data and explicit one-action approvals."""
 
-    def __init__(self, parent: wx.Window, view: str, goal: Optional[dict] = None):
+    def __init__(self, parent: wx.Window, view: str, goal: dict | None = None):
         super().__init__(
             parent,
             title=f"muse.ai {view.title()}",
@@ -42,7 +43,7 @@ class MuseAiDialog(wx.Dialog):
         )
         self.view = view
         self.goal = goal
-        self.chat_request: Optional[tuple[str, str, str]] = None
+        self.chat_request: tuple[str, str, str] | None = None
         self.items: list[dict] = []
         self._action_task = TaskSlot(_call_after_alive)
         self._busy = False
@@ -229,7 +230,7 @@ class MuseAiDialog(wx.Dialog):
 
             self.links.Enable(valid and bool(museai_item_links(item)))
 
-    def _selected(self) -> Optional[dict]:
+    def _selected(self) -> dict | None:
         selected = self.list.GetSelection()
         return self.items[selected] if 0 <= selected < len(self.items) else None
 

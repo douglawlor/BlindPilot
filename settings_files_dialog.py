@@ -16,7 +16,6 @@ calls are patched here, where the calls are made from -- for example
 
 from __future__ import annotations
 
-from typing import Optional
 
 import wx
 
@@ -85,7 +84,7 @@ class SettingsFilesDialog(wx.Dialog):
     answers is "where would that even be".
     """
 
-    def __init__(self, parent: Optional[wx.Window], cwd: Optional[str]):
+    def __init__(self, parent: wx.Window | None, cwd: str | None):
         super().__init__(
             parent,
             title="Backend Settings",

@@ -25,7 +25,6 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Optional
 
 LOG_NAME = "blindpilot.log"
 CRASH_NAME = "blindpilot-crash.log"
@@ -108,7 +107,7 @@ def _level() -> int:
     return resolved if isinstance(resolved, int) else logging.INFO
 
 
-def start_logging() -> Optional[Path]:
+def start_logging() -> Path | None:
     """Begin writing to the log, and route what would otherwise vanish into it.
 
     Returns where it is writing, or None if it could not. Losing the log is

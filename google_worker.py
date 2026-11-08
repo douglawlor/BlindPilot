@@ -49,7 +49,6 @@ import json
 import os
 import subprocess
 import threading
-from typing import Optional
 
 from owned_process import owned_popen
 from agent_backends import (
@@ -209,10 +208,10 @@ class _GoogleTurnWorker(_TurnWorker):
         super().__init__(*args, **kwargs)
 
     def _setup(self) -> None:
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: subprocess.Popen | None = None
         self._error_lines: list[str] = []
         self._error_lock = threading.Lock()
-        self._stderr_thread: Optional[threading.Thread] = None
+        self._stderr_thread: threading.Thread | None = None
         self._parts: list[str] = []
         self._fed_parts = 0
         self._answer_streamer = SentenceStreamer(self._say)
@@ -348,7 +347,7 @@ class _GoogleTurnWorker(_TurnWorker):
             reader.join(timeout=5)
 
     def _finish(self, proc: subprocess.Popen) -> None:
-        code: Optional[int] = None
+        code: int | None = None
         try:
             code = proc.wait(timeout=10)
         except (OSError, subprocess.TimeoutExpired):
@@ -583,7 +582,7 @@ class AntigravityWorker(_GoogleTurnWorker):
         # is not read twice.
         self._announced: set[int] = set()
         self._reported: set[int] = set()
-        self._text_step: Optional[int] = None
+        self._text_step: int | None = None
 
     def _command(self, binary: str) -> list[str]:
         command = [

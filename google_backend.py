@@ -37,7 +37,6 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Optional
 
 import agent_backends
 from agent_backends import BACKEND_ANTIGRAVITY, BACKEND_GEMINI
@@ -123,7 +122,7 @@ def gemini_google_account() -> str:
 # --------------------------------------------------------------------------
 
 
-def _probe(binary: str, args: list[str], timeout: int) -> tuple[Optional[int], str]:
+def _probe(binary: str, args: list[str], timeout: int) -> tuple[int | None, str]:
     return agent_backends._probe_backend(binary, args, timeout)
 
 

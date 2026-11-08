@@ -384,7 +384,7 @@ class ProtocolMixin(BaseProvider):
         yield StreamEvent("done")
 
     @staticmethod
-    def _empty_response_reason(tools: "ToolCallCollector") -> str:
+    def _empty_response_reason(tools: ToolCallCollector) -> str:
         """Why a request that returned no answer returned no answer.
 
         A model that ends its turn asking for a tool this application does not

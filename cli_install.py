@@ -29,7 +29,7 @@ import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from collections.abc import Callable, Sequence
 
 import backend_pool
 from agent_backends import (
@@ -117,7 +117,7 @@ def _fallback_claude_paths() -> tuple[Path, ...]:
     )
 
 
-def _login_shell() -> Optional[str]:
+def _login_shell() -> str | None:
     """The user's real login shell, if there is one (POSIX only)."""
     if platform.system() == "Windows":
         return None
@@ -125,7 +125,7 @@ def _login_shell() -> Optional[str]:
     return shell if shell and os.path.isfile(shell) else None
 
 
-def _login_shell_which(name: str) -> Optional[str]:
+def _login_shell_which(name: str) -> str | None:
     """Resolve *name* the way a login shell would.
 
     A GUI app launched from Finder or the Dock inherits a minimal PATH, so this
@@ -153,7 +153,7 @@ def _login_shell_which(name: str) -> Optional[str]:
     return None
 
 
-def _find_claude() -> Optional[str]:
+def _find_claude() -> str | None:
     """Locate the `claude` binary even when launched from a GUI app.
 
     Order: PATH, well-known install locations, then (POSIX only) the user's
@@ -198,7 +198,7 @@ def _same_dir(a: str, b: str) -> bool:
     return bool(a.strip()) and norm(a) == norm(b)
 
 
-def _bundle_dir() -> Optional[str]:
+def _bundle_dir() -> str | None:
     """The folder a packaged build keeps its own libraries in, if this is one."""
     if not getattr(sys, "frozen", False):
         return None
@@ -247,7 +247,7 @@ def keep_bundle_off_child_path() -> None:
         os.environ["PATH"] = cleaned
 
 
-def _windows_persistent_path_dirs() -> List[str]:
+def _windows_persistent_path_dirs() -> list[str]:
     """Every directory on the *persistent* PATH — user PATH plus system PATH.
 
     This is what a freshly opened cmd, PowerShell 5, pwsh or Windows Terminal
@@ -257,7 +257,7 @@ def _windows_persistent_path_dirs() -> List[str]:
     """
     import winreg
 
-    dirs: List[str] = []
+    dirs: list[str] = []
     for root, subkey in (
         (winreg.HKEY_CURRENT_USER, r"Environment"),
         (
@@ -275,7 +275,7 @@ def _windows_persistent_path_dirs() -> List[str]:
     return dirs
 
 
-def _posix_persistent_path_dirs() -> List[str]:
+def _posix_persistent_path_dirs() -> list[str]:
     """The PATH a fresh Terminal window would have.
 
     Asks the user's own login shell, so whatever their .zprofile / .zshrc /
@@ -377,7 +377,7 @@ def _add_to_process_path(directory: Path) -> None:
         os.environ["PATH"] = entry + os.pathsep + current
 
 
-def _path_with_entry(current: str, directory: str) -> Optional[str]:
+def _path_with_entry(current: str, directory: str) -> str | None:
     """The PATH string *current* with *directory* appended, or None if present.
 
     Kept separate from the registry write so the string surgery — the part that
@@ -432,7 +432,7 @@ def _path_export_line(directory: Path, shell: str) -> str:
     return f'export PATH="{text}:$PATH"'
 
 
-def ensure_on_posix_path(directory: Path) -> Optional[str]:
+def ensure_on_posix_path(directory: Path) -> str | None:
     """Add *directory* to PATH for future terminal sessions on macOS / Linux.
 
     Appends an export line to the login shell's startup file — the equivalent
@@ -461,7 +461,7 @@ def ensure_on_posix_path(directory: Path) -> Optional[str]:
     return str(profile)
 
 
-def ensure_on_path(directory: Path) -> Optional[str]:
+def ensure_on_path(directory: Path) -> str | None:
     """Make *directory* reachable from a terminal, persistently.
 
     Returns a description of what was changed, or None if nothing needed
@@ -514,7 +514,7 @@ def ensure_on_windows_path(directory: Path) -> bool:
     return True
 
 
-def _powershell_exe() -> Optional[str]:
+def _powershell_exe() -> str | None:
     """Windows PowerShell first — it ships with Windows 11, pwsh may not."""
     for name in ("powershell.exe", "powershell", "pwsh.exe", "pwsh"):
         found = shutil.which(name)
@@ -523,7 +523,7 @@ def _powershell_exe() -> Optional[str]:
     return None
 
 
-def _script_installer_argv(powershell_command: str, posix_url: str) -> Optional[List[str]]:
+def _script_installer_argv(powershell_command: str, posix_url: str) -> list[str] | None:
     """The command that runs an official script installer on this platform.
 
     None when the prerequisites are missing: no PowerShell on Windows, no curl
@@ -551,12 +551,12 @@ def _script_installer_argv(powershell_command: str, posix_url: str) -> Optional[
     return [shell, "-c", f"curl -fsSL {posix_url} | bash"]
 
 
-def _install_argv() -> Optional[List[str]]:
+def _install_argv() -> list[str] | None:
     """Claude Code's official native installer for this platform."""
     return _script_installer_argv(f"irm {WINDOWS_INSTALL_PS1_URL} | iex", POSIX_INSTALL_SH_URL)
 
 
-def _hermes_install_argv() -> Optional[List[str]]:
+def _hermes_install_argv() -> list[str] | None:
     """Hermes' official installer for this platform."""
     return _script_installer_argv(f"iex (irm {HERMES_INSTALL_PS1_URL})", HERMES_INSTALL_SH_URL)
 
@@ -595,7 +595,7 @@ def _uv_local_python_dir() -> Path:
     return base / "uv" / "python"
 
 
-def _windows_file_attributes(directory: Path) -> Optional[int]:
+def _windows_file_attributes(directory: Path) -> int | None:
     """The Windows ``st_file_attributes`` of a folder, or None when it cannot be asked."""
     try:
         return getattr(os.stat(directory), "st_file_attributes", 0)
@@ -679,7 +679,7 @@ def _remember_windows_env_var(name: str, value: str) -> None:
     _broadcast_environment_change()
 
 
-def _hermes_installer_env(log: Callable[[str], None]) -> Optional[dict[str, str]]:
+def _hermes_installer_env(log: Callable[[str], None]) -> dict[str, str] | None:
     """The environment Hermes' installer runs in, or None to change nothing.
 
     Its Python bootstrap is uv's, and uv's default home for interpreters is the
@@ -746,7 +746,7 @@ def _hermes_bootstrap_failure(lines: Sequence[str]) -> str:
     )
 
 
-def _hermes_binary_after_install() -> Optional[str]:
+def _hermes_binary_after_install() -> str | None:
     """The Hermes launcher after an install, with its install dirs on PATH.
 
     The installers drop the launcher under the user's home, ``~/.local/bin``
@@ -771,7 +771,7 @@ def _hermes_binary_after_install() -> Optional[str]:
     return find_hermes_cli()
 
 
-def install_hermes(log: Callable[[str], None]) -> Optional[str]:
+def install_hermes(log: Callable[[str], None]) -> str | None:
     """Run Hermes' official installer for this platform and report the result.
 
     The same discipline as install_claude: the installer's exit code is
@@ -785,7 +785,7 @@ def install_hermes(log: Callable[[str], None]) -> Optional[str]:
     log(
         "Downloading and running the official Hermes installer. This usually takes a minute or two."
     )
-    heard: List[str] = []
+    heard: list[str] = []
 
     def logged(line: str) -> None:
         heard.append(line)
@@ -830,7 +830,7 @@ ANTIGRAVITY_INSTALL_PS1_URL = "https://antigravity.google/cli/install.ps1"
 ANTIGRAVITY_INSTALL_SH_URL = "https://antigravity.google/cli/install.sh"
 
 
-def install_antigravity(log: Callable[[str], None]) -> Optional[str]:
+def install_antigravity(log: Callable[[str], None]) -> str | None:
     """Run Google's Antigravity CLI installer and report the result.
 
     As with the other script installers, a working `agy` afterwards is the
@@ -862,7 +862,7 @@ def install_antigravity(log: Callable[[str], None]) -> Optional[str]:
     return binary
 
 
-def _muse_install_argv() -> Optional[List[str]]:
+def _muse_install_argv() -> list[str] | None:
     """Muse's official installer, run wherever Muse can actually live.
 
     Muse's CLI ships for macOS and Linux only, so on Windows there is no
@@ -899,7 +899,7 @@ def _muse_missing_prereq_message() -> str:
     return _missing_prereq_message("Muse's installer")
 
 
-def install_muse(log: Callable[[str], None]) -> Optional[str]:
+def install_muse(log: Callable[[str], None]) -> str | None:
     """Run Muse's official installer for this platform and report the result.
 
     Same discipline as install_hermes: the installer's exit code is advisory,
@@ -936,7 +936,7 @@ def _path_shells() -> str:
     return "Terminal and iTerm"
 
 
-def install_claude(log: Callable[[str], None]) -> Optional[str]:
+def install_claude(log: Callable[[str], None]) -> str | None:
     """Run the official native installer for this platform and put it on PATH.
 
     Streams installer output line by line to *log* (so the caller can show and
@@ -1031,8 +1031,8 @@ def _node_runtime_root() -> Path:
 
 
 def _node_archive_spec(
-    version: str, system: Optional[str] = None, machine: Optional[str] = None
-) -> Optional[tuple[str, str]]:
+    version: str, system: str | None = None, machine: str | None = None
+) -> tuple[str, str] | None:
     """Return the official Node archive name and its extracted folder."""
     system = system or platform.system()
     machine = (machine or platform.machine()).casefold()
@@ -1050,7 +1050,7 @@ def _node_archive_spec(
     return stem + extension, stem
 
 
-def _managed_node_dir() -> Optional[Path]:
+def _managed_node_dir() -> Path | None:
     """Newest complete portable Node runtime previously installed by BlindPilot."""
     spec = _node_archive_spec("v0.0.0")
     if spec is None:
@@ -1070,7 +1070,7 @@ def _managed_node_dir() -> Optional[Path]:
     return max(candidates, default=((), None), key=lambda item: item[0])[1]
 
 
-def _managed_npm() -> Optional[str]:
+def _managed_npm() -> str | None:
     runtime = _managed_node_dir()
     if runtime is None:
         return None
@@ -1088,7 +1088,7 @@ def activate_managed_cli_paths() -> None:
         _add_to_process_path(managed_bin)
 
 
-def _find_npm() -> Optional[str]:
+def _find_npm() -> str | None:
     return shutil.which("npm") or _managed_npm()
 
 
@@ -1118,7 +1118,7 @@ def _safe_extract_node_archive(archive_path: Path, destination: Path) -> None:
         archive.extractall(destination, filter="data")
 
 
-def install_portable_node(log: Callable[[str], None]) -> Optional[str]:
+def install_portable_node(log: Callable[[str], None]) -> str | None:
     """Install the latest Node LTS and npm for this user, with no elevation."""
     existing = _managed_npm()
     if existing:
@@ -1234,7 +1234,7 @@ def _npm_environment(npm: str) -> dict[str, str]:
     return env
 
 
-def _npm_install_argv(backend: str, latest: bool = False) -> Optional[List[str]]:
+def _npm_install_argv(backend: str, latest: bool = False) -> list[str] | None:
     """The npm command that installs a backend, or None if npm is unavailable.
 
     `latest` pins the package's latest tag, which is what an update wants.
@@ -1253,11 +1253,11 @@ def _npm_install_argv(backend: str, latest: bool = False) -> Optional[List[str]]
     ]
 
 
-def _npm_update_argv(backend: str) -> Optional[List[str]]:
+def _npm_update_argv(backend: str) -> list[str] | None:
     return _npm_install_argv(backend, latest=True)
 
 
-def _managed_backend_binary(backend: str) -> Optional[str]:
+def _managed_backend_binary(backend: str) -> str | None:
     executable = BACKENDS[normalize_backend(backend)].executable
     suffixes = (".exe", ".cmd", ".ps1", "") if platform.system() == "Windows" else ("",)
     return next(
@@ -1271,8 +1271,8 @@ def _managed_backend_binary(backend: str) -> Optional[str]:
 
 
 def _run_logged_process(
-    argv: List[str], log: Callable[[str], None], env: Optional[dict[str, str]] = None
-) -> Optional[int]:
+    argv: list[str], log: Callable[[str], None], env: dict[str, str] | None = None
+) -> int | None:
     try:
         proc = subprocess.Popen(
             argv,
@@ -1323,7 +1323,7 @@ def _install_uv(log: Callable[[str], None]) -> bool:
     return find_uv() is not None
 
 
-def install_museai(log: Callable[[str], None], upgrade: bool = False) -> Optional[str]:
+def install_museai(log: Callable[[str], None], upgrade: bool = False) -> str | None:
     """Install or upgrade muse-cli, the client muse.ai is driven through.
 
     It is a Python package, so uv installs it as a tool (its own environment,
@@ -1352,7 +1352,7 @@ def install_museai(log: Callable[[str], None], upgrade: bool = False) -> Optiona
     return binary
 
 
-def install_backend(backend: str, log: Callable[[str], None]) -> Optional[str]:
+def install_backend(backend: str, log: Callable[[str], None]) -> str | None:
     """Install one selected backend and return its discovered executable."""
     backend = normalize_backend(backend)
     if backend == BACKEND_CLAUDE:

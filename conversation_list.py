@@ -10,7 +10,7 @@ object, kept together here so they agree on what a row is.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import wx
 from wx.lib.wordwrap import wordwrap
@@ -47,7 +47,7 @@ def style_for(kind: str) -> RowStyle:
     return _STYLES.get(kind, _STYLES["prose"])
 
 
-def as_rows(items: Sequence[Union[Row, str]]) -> list[Row]:
+def as_rows(items: Sequence[Row | str]) -> list[Row]:
     """Rows as given; bare strings become prose rows so plain lists can use this."""
     rows: list[Row] = []
     for item in items:
@@ -117,7 +117,7 @@ class ConversationList(wx.VListBox):
     def GetCount(self) -> int:  # type: ignore[override]
         return len(self._rows)
 
-    def Set(self, items: Sequence[Union[Row, str]]) -> None:
+    def Set(self, items: Sequence[Row | str]) -> None:
         keep = self.GetSelection()
         self._rows = as_rows(items)
         # Cleared before the count changes so no stale height survives.
@@ -128,13 +128,13 @@ class ConversationList(wx.VListBox):
             self.SetSelection(min(keep, len(self._rows) - 1))
         self.RefreshAll()
 
-    def AppendItems(self, items: Sequence[Union[Row, str]]) -> None:
+    def AppendItems(self, items: Sequence[Row | str]) -> None:
         self._rows.extend(as_rows(items))
         # Heights of the rows that stayed are still right. Only the count grows.
         self.SetItemCount(len(self._rows))
         self.RefreshAll()
 
-    def ReplaceLast(self, item: Union[Row, str]) -> None:
+    def ReplaceLast(self, item: Row | str) -> None:
         """Change the last row in place: no rebuild, so the selection and the
         reader stay where they are. A live status line uses it."""
         if not self._rows:
@@ -400,19 +400,19 @@ class NativeConversationList(wx.ListBox):
     def GetRows(self) -> list[Row]:
         return list(self._rows)
 
-    def Set(self, items: Sequence[Union[Row, str]]) -> None:
+    def Set(self, items: Sequence[Row | str]) -> None:
         keep = self.GetSelection()
         self._rows = as_rows(items)
         wx.ListBox.Set(self, [row.label for row in self._rows])
         if self._rows and keep != wx.NOT_FOUND:
             self.SetSelection(min(keep, len(self._rows) - 1))
 
-    def AppendItems(self, items: Sequence[Union[Row, str]]) -> None:
+    def AppendItems(self, items: Sequence[Row | str]) -> None:
         new_rows = as_rows(items)
         self._rows.extend(new_rows)
         super().AppendItems([row.label for row in new_rows])
 
-    def ReplaceLast(self, item: Union[Row, str]) -> None:
+    def ReplaceLast(self, item: Row | str) -> None:
         """Change the last row in place, leaving the selection alone."""
         if not self._rows:
             self.AppendItems([item])

@@ -18,7 +18,6 @@ import platform
 import re
 import threading
 from dataclasses import dataclass
-from typing import List
 
 from agent_backends import backend_label
 from dialog_tasks import _call_after_alive
@@ -27,7 +26,8 @@ from markdown_rows import _MD_CONVERSATION
 from screen_speech import announce
 from session_history import HistoryEntry, HistoryTurn, load_turns
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
+from collections.abc import Callable
 
 import wx
 
@@ -147,8 +147,8 @@ class ConversationWebView:
         *,
         title: str,
         on_close: Callable[[], None],
-        can_focus: Optional[Callable[[], bool]] = None,
-        on_command: Optional[Callable[[str], None]] = None,
+        can_focus: Callable[[], bool] | None = None,
+        on_command: Callable[[str], None] | None = None,
     ):
         self._on_close = on_close
         self._closed = False
@@ -158,7 +158,7 @@ class ConversationWebView:
         self._focus_requested = False
         self._view: Any = None
         self.view: Any = None
-        self.fallback: Optional[wx.TextCtrl] = None
+        self.fallback: wx.TextCtrl | None = None
         self._initial_document_pending = True
 
         if not _modern_browser_available():
@@ -331,8 +331,8 @@ class ConversationWebViewPanel(wx.Panel):
         title: str,
         missing: str = "No messages found in this conversation.",
         *,
-        on_close: Callable[["ConversationWebViewPanel"], None],
-        on_command: Optional[Callable[[str], None]] = None,
+        on_close: Callable[[ConversationWebViewPanel], None],
+        on_command: Callable[[str], None] | None = None,
     ):
         super().__init__(parent, name=f"Read: {title}")
 
@@ -341,11 +341,11 @@ class ConversationWebViewPanel(wx.Panel):
         self._missing = missing
         self._on_close = on_close
         self._on_command = on_command
-        self.return_to: Optional[wx.Window] = None
+        self.return_to: wx.Window | None = None
         self.last_status = "Loading conversation"
         # The browser adapter is imported only when a conversation is opened.
-        self._webview: Optional[Any] = None
-        self._text: Optional[wx.TextCtrl] = None
+        self._webview: Any | None = None
+        self._text: wx.TextCtrl | None = None
         # Set when the window is closed, so a load that was already on its way
         # does not speak for a window that is no longer there.
         self._closed = False
@@ -457,7 +457,7 @@ class ConversationWebViewPanel(wx.Panel):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _show_conversation(self, turns: List[HistoryTurn], error: str) -> None:
+    def _show_conversation(self, turns: list[HistoryTurn], error: str) -> None:
         if self._closed or not self:
             return
         self.source_status.ChangeValue(error)
@@ -487,7 +487,7 @@ class ConversationWebViewPanel(wx.Panel):
             # without it the reader is left with a dialog and nothing in it.
             self.focus_content()
 
-    def _conversation_html(self, turns: List[HistoryTurn]) -> str:
+    def _conversation_html(self, turns: list[HistoryTurn]) -> str:
         """The conversation as a document fragment.
 
         The title is the one heading of level one, so the reader can get to
@@ -510,7 +510,7 @@ class ConversationWebViewPanel(wx.Panel):
                 )
         return "\n".join(parts)
 
-    def _conversation_text(self, turns: List[HistoryTurn]) -> str:
+    def _conversation_text(self, turns: list[HistoryTurn]) -> str:
         """The conversation as plain text, for a machine with no web view."""
         parts: list[str] = []
         speaker = backend_label(self._entry.backend)
@@ -533,7 +533,7 @@ class ConversationWebViewPanel(wx.Panel):
         if self._can_focus():
             control.SetFocus()
 
-    def _plain_control(self) -> Optional[wx.TextCtrl]:
+    def _plain_control(self) -> wx.TextCtrl | None:
         """The box the text is shown in, when there is no web view."""
         if self._text is not None:
             return self._text

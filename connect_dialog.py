@@ -21,7 +21,6 @@ from __future__ import annotations
 import threading
 import urllib.parse
 import webbrowser
-from typing import List, Optional
 
 import wx
 
@@ -81,7 +80,7 @@ class ConnectDialog(wx.Dialog):
 
     def __init__(self, parent: wx.Window):
         super().__init__(parent, title="Connect a provider to opencode")
-        self._providers: List[tuple[str, str]] = []
+        self._providers: list[tuple[str, str]] = []
         self._connected: set[str] = set()
         self._busy = False
 
@@ -129,7 +128,7 @@ class ConnectDialog(wx.Dialog):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _show(self, providers: List[tuple[str, str]], connected: set, error: str) -> None:
+    def _show(self, providers: list[tuple[str, str]], connected: set, error: str) -> None:
         if not self:  # closed while the list was being read
             return
         # Read what was selected against the list it was selected in: connecting
@@ -181,7 +180,7 @@ class ConnectDialog(wx.Dialog):
 
     # ----- connecting -----
 
-    def _ask(self, prompts: object, secret_key: str = "") -> Optional[dict]:
+    def _ask(self, prompts: object, secret_key: str = "") -> dict | None:
         """Collect whatever a provider needs before it can be signed in to.
 
         Providers ask for anything from an account id to a self-hosted URL, and
@@ -262,7 +261,7 @@ class ConnectDialog(wx.Dialog):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _choose_method(self, provider_id: str, name: str, methods: List[dict]) -> None:
+    def _choose_method(self, provider_id: str, name: str, methods: list[dict]) -> None:
         if not self:
             return
         self._set_busy(False, f"{name}: choose how to sign in.")

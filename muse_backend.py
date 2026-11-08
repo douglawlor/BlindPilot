@@ -36,7 +36,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from hermes_backend import (
     StdioTransport,
@@ -86,7 +86,7 @@ _MSP_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "
 # --------------------------------------------------------------------------
 
 
-def wsl_muse_path(timeout: int = CLI_PROBE_TIMEOUT) -> Optional[str]:
+def wsl_muse_path(timeout: int = CLI_PROBE_TIMEOUT) -> str | None:
     """Muse's launcher path inside WSL, or None when there is no Muse there.
 
     Cached for the life of the process, like the other WSL answers: every
@@ -119,11 +119,11 @@ def wsl_muse_path(timeout: int = CLI_PROBE_TIMEOUT) -> Optional[str]:
 
 
 # Cached answers; see wsl_muse_path for why they are cached.
-_WSL_MUSE: Optional[str] = None
+_WSL_MUSE: str | None = None
 _WSL_MUSE_CHECKED = False
 
 
-def _posix_launcher_fallback() -> Optional[str]:
+def _posix_launcher_fallback() -> str | None:
     """The launcher where the official installer puts it, PATH or no PATH.
 
     The installer drops the launcher in $MUSE_INSTALL_DIR or ~/.local/bin
@@ -138,7 +138,7 @@ def _posix_launcher_fallback() -> Optional[str]:
     return str(candidate) if candidate.is_file() else None
 
 
-def muse_cli_path() -> Optional[str]:
+def muse_cli_path() -> str | None:
     """The launcher's path as a report can show it, or None when not installed.
 
     On Windows this is a path inside the WSL distribution, not a Windows one;
@@ -201,7 +201,7 @@ def reset_discovery() -> None:
     _HOME_CHECKED = False
 
 
-def muse_command(cwd: Optional[str] = None) -> Optional[list[str]]:
+def muse_command(cwd: str | None = None) -> list[str] | None:
     """The argv that runs `muse serve` (or any muse subcommand) from here.
 
     Returns None when Muse is not installed where this process can reach it.
@@ -233,7 +233,7 @@ def muse_command(cwd: Optional[str] = None) -> Optional[list[str]]:
 # --------------------------------------------------------------------------
 
 
-def _wsl_credential_path() -> Optional[str]:
+def _wsl_credential_path() -> str | None:
     """The credential file's path as WSL sees it, or None without WSL.
 
     Resolved inside WSL rather than guessed, so a distribution whose home is
@@ -263,7 +263,7 @@ def _wsl_credential_path() -> Optional[str]:
     return found or None
 
 
-def _credential_path() -> Optional[str]:
+def _credential_path() -> str | None:
     """Where Muse's credentials live, in this process's own terms."""
     if platform.system() == "Windows":
         return _wsl_credential_path()
@@ -272,7 +272,7 @@ def _credential_path() -> Optional[str]:
     return str(path) if path.is_file() else None
 
 
-def muse_credentials() -> Optional[dict]:
+def muse_credentials() -> dict | None:
     """The account Muse stored at sign-in, or None when there is none.
 
     Read off disk rather than asked of the CLI: the checks that need this run
@@ -411,7 +411,7 @@ def muse_account_lines() -> list[str]:
 # --------------------------------------------------------------------------
 
 
-def _await_reply(transport: StdioTransport, request_id: int, timeout: float) -> Optional[dict]:
+def _await_reply(transport: StdioTransport, request_id: int, timeout: float) -> dict | None:
     """The answer to one request off a freshly opened host, or None."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -426,8 +426,8 @@ def _await_reply(transport: StdioTransport, request_id: int, timeout: float) -> 
 
 
 def _open_host(
-    command: Sequence[str], cwd: Optional[str], timeout: float = MODEL_QUERY_TIMEOUT
-) -> tuple[Optional[StdioTransport], Optional[dict]]:
+    command: Sequence[str], cwd: str | None, timeout: float = MODEL_QUERY_TIMEOUT
+) -> tuple[StdioTransport | None, dict | None]:
     """A `muse serve` that answered initialize, with what initialize said.
 
     Either both -- an open host and its initialize result -- or neither; a
@@ -461,7 +461,7 @@ _catalog_lock = threading.Lock()
 _catalog_cache: tuple[float, tuple[list[str], list[str], str, str]] | None = None
 
 
-def muse_model_catalog(cwd: Optional[str] = None) -> tuple[list[str], list[str], str, str]:
+def muse_model_catalog(cwd: str | None = None) -> tuple[list[str], list[str], str, str]:
     """(models, efforts, current model, current effort) from a live MSP host.
 
     The catalog comes from `model/list` on a real `muse serve`, reached over
@@ -546,7 +546,7 @@ def _muse_effort_levels(command: Sequence[str]) -> list[str]:
 
 
 def muse_model_options(
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
 ) -> tuple[list[str], list[str], str, str, str]:
     """The picker's answer: (models, efforts, current model, current effort, error)."""
     try:
@@ -579,7 +579,7 @@ def _muse_data_dirs() -> list[Path]:
     return seen
 
 
-def muse_index_db() -> Optional[Path]:
+def muse_index_db() -> Path | None:
     """Muse's session index on this machine, or None when it is not here.
 
     The guessed directories first; when none of them holds a store, a live
@@ -600,11 +600,11 @@ def muse_index_db() -> Optional[Path]:
     return None
 
 
-_HOME_CACHE: Optional[str] = None
+_HOME_CACHE: str | None = None
 _HOME_CHECKED = False
 
 
-def _muse_home_live() -> Optional[str]:
+def _muse_home_live() -> str | None:
     """Where a live host keeps its data (initialize.museHome), asked once.
 
     The offline guesses cover every layout seen so far; this is the fallback
@@ -638,7 +638,7 @@ def _muse_home_live() -> Optional[str]:
     return _HOME_CACHE
 
 
-def wsl_muse_index_db() -> Optional[str]:
+def wsl_muse_index_db() -> str | None:
     """The session index path as WSL sees it, or None without WSL."""
     launcher = wsl_exe()
     if not launcher:
@@ -860,7 +860,7 @@ _IMAGE_MAGIC: tuple[tuple[bytes, str], ...] = (
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 
-def muse_image_part(path: str) -> Optional[dict]:
+def muse_image_part(path: str) -> dict | None:
     """One file as an MSP image input part, or None when it is not one.
 
     Only image bytes qualify; anything else -- a document, an unreadable file,
@@ -899,7 +899,7 @@ _skills_cache: dict[str, tuple[float, list[tuple[str, str]]]] = {}
 SKILLS_CACHE_SECONDS = 300.0
 
 
-def muse_skills(cwd: Optional[str] = None) -> list[tuple[str, str]]:
+def muse_skills(cwd: str | None = None) -> list[tuple[str, str]]:
     """(selector, description) skills Muse offers in one directory.
 
     Asked of the CLI, which answers offline from its bundled, user, and
@@ -919,7 +919,7 @@ def muse_skills(cwd: Optional[str] = None) -> list[tuple[str, str]]:
     return list(rows)
 
 
-def _muse_skills_live(cwd: Optional[str]) -> list[tuple[str, str]]:
+def _muse_skills_live(cwd: str | None) -> list[tuple[str, str]]:
     command = muse_command(cwd)
     if not command:
         return []
@@ -966,7 +966,7 @@ def _muse_skills_live(cwd: Optional[str]) -> list[tuple[str, str]]:
 # --------------------------------------------------------------------------
 
 _usage_lock = threading.Lock()
-_usage_payload: Optional[dict] = None
+_usage_payload: dict | None = None
 
 
 def note_muse_usage(payload: object) -> None:
@@ -985,7 +985,7 @@ def note_muse_usage(payload: object) -> None:
         _usage_payload = dict(payload)
 
 
-def muse_usage_payload() -> Optional[dict]:
+def muse_usage_payload() -> dict | None:
     """The stashed usage, or None once both of its windows have reset."""
     global _usage_payload
     with _usage_lock:

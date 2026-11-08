@@ -34,7 +34,7 @@ import re
 import subprocess
 import threading
 import urllib.parse
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from owned_process import owned_popen
 from agent_backends import (
@@ -278,7 +278,7 @@ def build_command(
     permission_mode: str,
     model: str = "",
     effort: str = "",
-    session_id: Optional[str] = None,
+    session_id: str | None = None,
     additional_dirs: tuple[str, ...] = (),
 ) -> list[str]:
     """The argv for one headless turn. The prompt itself travels on stdin."""
@@ -323,7 +323,7 @@ class CommandcodeWorker(threading.Thread):
     def __init__(
         self,
         prompt: str,
-        session_id: Optional[str],
+        session_id: str | None,
         cwd: str,
         permission_mode: str,
         *,
@@ -334,16 +334,16 @@ class CommandcodeWorker(threading.Thread):
         allow_session_retry: bool = True,
         auto_free_fallback: bool = False,
         auto_route: bool = False,
-        auto_context_tokens: Optional[int] = None,
+        auto_context_tokens: int | None = None,
         on_session: Callable[[str], None],
         on_started: Callable[[], None],
         on_activity: Callable[[str, str], None],
         on_complete: Callable[[str], None],
         on_failed: Callable[[str], None],
         on_done: Callable[[], None],
-        on_question: Optional[AskQuestions] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
-        on_subagent: Optional[SubagentReport] = None,
+        on_question: AskQuestions | None = None,
+        on_permission: Callable[[str, dict, list], dict] | None = None,
+        on_subagent: SubagentReport | None = None,
     ) -> None:
         super().__init__(daemon=True)
         self._prompt = prompt
@@ -355,7 +355,7 @@ class CommandcodeWorker(threading.Thread):
         self._additional_dirs = additional_dirs
         # Headless compaction summarizes into a fresh persisted session.
         self._compact = compact
-        self._compact_child: Optional[CommandcodeWorker] = None
+        self._compact_child: CommandcodeWorker | None = None
         # Whether a lost --resume may be retried as a fresh conversation. A
         # compaction child must not: summarizing an empty conversation would
         # "succeed" with a content-free replacement session.
@@ -377,7 +377,7 @@ class CommandcodeWorker(threading.Thread):
         # window): priced by the capacity retry, and read by the window when
         # the turn ends. The CLI's print-mode stream reports no window, so
         # that half stays 0 and the window keeps the one it already knows.
-        self.context_tokens: Optional[tuple[int, int]] = None
+        self.context_tokens: tuple[int, int] | None = None
         self._on_session = on_session
         self._on_started = on_started
         self._on_activity = on_activity
@@ -393,8 +393,8 @@ class CommandcodeWorker(threading.Thread):
         # failure can be said as the agent's.
         self._subagent_calls: set[str] = set()
 
-        self._proc: Optional[subprocess.Popen] = None
-        self._stderr_thread: Optional[threading.Thread] = None
+        self._proc: subprocess.Popen | None = None
+        self._stderr_thread: threading.Thread | None = None
         self._cancelled = False
         self._cancel_event = threading.Event()
         self._failed = False
@@ -420,12 +420,12 @@ class CommandcodeWorker(threading.Thread):
         # A rate or credit failure before the model has said or done anything
         # may use one catalog-confirmed free model. The resumed conversation
         # stays the same; only the model and model-specific effort change.
-        self._free_fallback: Optional[Route] = None
+        self._free_fallback: Route | None = None
         self._free_fallback_retried = False
         self._free_fallback_code = 0
         # The same shape for a provider-capacity stop: one retry on the next
         # paid model of the same tier, excluding the model that just failed.
-        self._capacity_retry: Optional[Route] = None
+        self._capacity_retry: Route | None = None
         self._capacity_retried = False
         self._capacity_failed_model = ""
         self._run_model = model
@@ -511,7 +511,7 @@ class CommandcodeWorker(threading.Thread):
             "validation results, and unfinished work. Return only the summary. "
             "Do not run tools or change files.",
         ]
-        session: Optional[str] = self._session_id
+        session: str | None = self._session_id
         model, effort = self._model, self._effort
         for stage in range(2):
             if self._cancelled:
@@ -1226,7 +1226,7 @@ class CommandcodeWorker(threading.Thread):
 
     def _finish(self, proc: subprocess.Popen) -> None:
         """Report the outcome once the stream has ended."""
-        code: Optional[int] = None
+        code: int | None = None
         try:
             code = proc.wait(timeout=10)
         except (OSError, subprocess.TimeoutExpired):
@@ -1347,11 +1347,11 @@ class CommandcodeWorker(threading.Thread):
         """
         return self._auto_free_fallback and not self._assistant_parts and not self._tool_ran
 
-    def _can_retry_with_free_model(self, code: Optional[int]) -> bool:
+    def _can_retry_with_free_model(self, code: int | None) -> bool:
         """Whether a rate or credit stop is safe to replay once on free."""
         return self._safe_to_replay() and not self._free_fallback_retried and code in (5, 10)
 
-    def _capacity_stop(self, code: Optional[int]) -> bool:
+    def _capacity_stop(self, code: int | None) -> bool:
         """Whether this run died on a provider-capacity stop.
 
         Exit 1 with the server's own capacity text on stderr -- the CLI does
@@ -1371,7 +1371,7 @@ class CommandcodeWorker(threading.Thread):
         """
         return self._safe_to_replay() and not self._capacity_retried
 
-    def _paid_capacity_retry(self) -> Optional[Route]:
+    def _paid_capacity_retry(self) -> Route | None:
         """The next paid model of the same tier, excluding the one that failed.
 
         Free candidates are excluded from the ask: a QUICK task's normal
@@ -1398,7 +1398,7 @@ class CommandcodeWorker(threading.Thread):
             return None
         return chosen
 
-    def _free_fallback_model(self) -> Optional[Route]:
+    def _free_fallback_model(self) -> Route | None:
         """The best confirmed free model other than this run's model."""
         try:
             candidate = best_free_model(

@@ -7,7 +7,7 @@ represented as completed for this extraction.
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional, Sequence
+from collections.abc import Callable, Sequence
 
 from agent_backends import backend_label
 from session_history import HistoryEntry, HistoryTurn, describe_age, load_turns
@@ -38,9 +38,9 @@ def search_turns(turns: Sequence[HistoryTurn], term: str) -> list[tuple[int, str
 def search_all_conversations(
     entries: Sequence[HistoryEntry],
     term: str,
-    on_progress: Optional[Callable[[int, str], None]] = None,
-    is_cancelled: Optional[Callable[[], bool]] = None,
-    load: Optional[Callable[[HistoryEntry], List[HistoryTurn]]] = None,
+    on_progress: Callable[[int, str], None] | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
+    load: Callable[[HistoryEntry], list[HistoryTurn]] | None = None,
 ) -> list[tuple[str, HistoryEntry, int, str]]:
     """Search every past conversation for `term`: (row label, entry, turn, whole).
 

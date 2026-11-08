@@ -11,7 +11,7 @@ represented as completed for this extraction.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Sequence
+from collections.abc import Callable, Sequence
 
 import wx
 
@@ -69,10 +69,10 @@ class QuestionDialog(wx.Dialog):
         )
         self._announce = announce
         self._questions = list(questions)
-        self._pickers: list[Optional[wx.Window]] = []
+        self._pickers: list[wx.Window | None] = []
         self._texts: list[wx.TextCtrl] = []
         self._labels: list[wx.StaticText] = []
-        self._previews: list[Optional[wx.TextCtrl]] = []
+        self._previews: list[wx.TextCtrl | None] = []
         pad = self.FromDIP(PAD_DIALOG)
         # The typed answer sits one dialog margin further in than its
         # question, so it reads as belonging to it.
@@ -112,7 +112,7 @@ class QuestionDialog(wx.Dialog):
             choices = [_question_choice(option) for option in question.options]
             if question.allow_custom:
                 choices.append(self.OTHER)
-            picker: Optional[wx.Window]
+            picker: wx.Window | None
             if not question.options:
                 # Nothing to pick from, so no picker. A RadioBox with "Other" as
                 # its only entry starts selected and can never change, so the
@@ -169,7 +169,7 @@ class QuestionDialog(wx.Dialog):
             # Some options carry a preview: what picking that one would
             # mean, as a mock-up or a sketch. It follows the choice, so it
             # sits under the answer box and is refilled as the choice moves.
-            preview: Optional[wx.TextCtrl] = None
+            preview: wx.TextCtrl | None = None
             if any(option.preview for option in question.options):
                 questions_sizer.Add(
                     wx.StaticText(self._scroll, label="Pre&view:"),

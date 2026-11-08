@@ -58,7 +58,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import Callable, Iterator, List, Optional, Sequence
+from collections.abc import Callable, Iterator, Sequence
 
 from agent_backends import (
     BACKEND_CLAUDE,
@@ -143,7 +143,7 @@ class HistoryTurn:
 
     prompt: str = ""
     response: str = ""
-    sequence: Optional[int] = None
+    sequence: int | None = None
 
 
 # Every CLI stuffs context of its own into the user side of the transcript —
@@ -219,9 +219,9 @@ def _without_injected_blocks(text: str) -> str:
     Linear in the number of tags, so a pasted file full of generics or an
     HTML fragment costs milliseconds rather than seconds.
     """
-    open_tags: List[tuple] = []  # (name, start offset), innermost last
+    open_tags: list[tuple] = []  # (name, start offset), innermost last
     open_counts: dict = {}
-    spans: List[tuple] = []  # (start, end) of elements to remove, in order
+    spans: list[tuple] = []  # (start, end) of elements to remove, in order
     for match in _TAG.finditer(text):
         closing, name = match.group(1), match.group(2)
         if not closing:
@@ -243,7 +243,7 @@ def _without_injected_blocks(text: str) -> str:
         spans.append((start, match.end()))
     if not spans:
         return text
-    pieces: List[str] = []
+    pieces: list[str] = []
     last = 0
     for start, end in spans:
         pieces.append(text[last:start])
@@ -264,7 +264,7 @@ def _content_text(content: object, kinds: Sequence[str]) -> str:
         return content.strip()
     if not isinstance(content, list):
         return ""
-    parts: List[str] = []
+    parts: list[str] = []
     for block in content:
         if not isinstance(block, dict) or block.get("type") not in kinds:
             continue
@@ -274,7 +274,7 @@ def _content_text(content: object, kinds: Sequence[str]) -> str:
     return "\n\n".join(parts)
 
 
-def _iter_jsonl(path: Path, limit: Optional[int] = None) -> Iterator[dict]:
+def _iter_jsonl(path: Path, limit: int | None = None) -> Iterator[dict]:
     """Yield the JSON objects in a JSONL transcript, skipping unreadable lines.
 
     A transcript being written to right now can end in a half-flushed line, and
@@ -367,12 +367,12 @@ class _JsonlFormat:
     # (``None`` for all of them). Claude Code's folder names *are* the working
     # directory, so it answers with one folder's files; the other two answer
     # with everything they have and are filtered by what they recorded.
-    paths: Callable[[Optional[str]], List[Path]]
+    paths: Callable[[str | None], list[Path]]
 
     # The session id and working directory this record gives, or ``None`` if
     # it is not a record that gives them. Handed the file as well, because
     # Claude Code has no header record at all: its file name is the id.
-    session_of: Callable[[Path, dict], Optional[tuple[str, str]]]
+    session_of: Callable[[Path, dict], tuple[str, str] | None]
 
     # The role ("user" or "assistant") and text of this record, or ("", "")
     # for anything else. This is where each CLI's own traffic -- tool calls,
@@ -386,7 +386,7 @@ class _JsonlFormat:
     scoped_by_recorded_cwd: bool = True
 
 
-def _globbed(root: Path, pattern: str) -> List[Path]:
+def _globbed(root: Path, pattern: str) -> list[Path]:
     """Files matching ``pattern`` under ``root``, or none if it cannot be walked."""
 
     # Path.glob suppresses traversal errors on recent Python versions. Walk
@@ -454,7 +454,7 @@ def _jsonl_head(fmt: _JsonlFormat, path: Path, modified: float) -> tuple[str, st
     return session_id, session_cwd, title
 
 
-def _jsonl_entry(fmt: _JsonlFormat, path: Path, cwd: Optional[str]) -> Optional[HistoryEntry]:
+def _jsonl_entry(fmt: _JsonlFormat, path: Path, cwd: str | None) -> HistoryEntry | None:
     """One transcript as a listing entry, or ``None`` if it cannot be offered.
 
     Reads only as far as the first thing the person typed, because that is the
@@ -481,8 +481,8 @@ def _jsonl_entry(fmt: _JsonlFormat, path: Path, cwd: Optional[str]) -> Optional[
     )
 
 
-def _jsonl_entries(fmt: _JsonlFormat, cwd: Optional[str]) -> List[HistoryEntry]:
-    entries: List[HistoryEntry] = []
+def _jsonl_entries(fmt: _JsonlFormat, cwd: str | None) -> list[HistoryEntry]:
+    entries: list[HistoryEntry] = []
     for path in fmt.paths(cwd):
         entry = _jsonl_entry(fmt, path, cwd)
         if entry is not None:
@@ -490,9 +490,9 @@ def _jsonl_entries(fmt: _JsonlFormat, cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _jsonl_turns(fmt: _JsonlFormat, entry: HistoryEntry) -> List[HistoryTurn]:
+def _jsonl_turns(fmt: _JsonlFormat, entry: HistoryEntry) -> list[HistoryTurn]:
     """A whole transcript read back as prompt-and-answer turns."""
-    turns: List[HistoryTurn] = []
+    turns: list[HistoryTurn] = []
     for record in _iter_jsonl(Path(entry.path)):
         role, text = fmt.message_of(record)
         if role == "user":
@@ -515,7 +515,7 @@ def claude_project_slug(cwd: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", cwd or "")
 
 
-def _claude_project_dirs(cwd: Optional[str]) -> List[Path]:
+def _claude_project_dirs(cwd: str | None) -> list[Path]:
     root = _home() / ".claude" / "projects"
     if cwd:
         exact = root / claude_project_slug(cwd)
@@ -537,7 +537,7 @@ def _claude_project_dirs(cwd: Optional[str]) -> List[Path]:
     )
 
 
-def _claude_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _claude_entries(cwd: str | None) -> list[HistoryEntry]:
     """Claude Code's conversations, Cowork ones labelled as Claude Desktop's."""
     return [
         replace(entry, folder="Claude Desktop")
@@ -557,7 +557,7 @@ def _claude_desktop_dir() -> Path:
     return _home() / ".config" / "Claude"
 
 
-def _claude_paths(cwd: Optional[str]) -> List[Path]:
+def _claude_paths(cwd: str | None) -> list[Path]:
     return [path for folder in _claude_project_dirs(cwd) for path in _globbed(folder, "*.jsonl")]
 
 
@@ -620,13 +620,13 @@ _CLAUDE = _JsonlFormat(
 # ----- Codex -----
 
 
-def _codex_paths(_cwd: Optional[str]) -> List[Path]:
+def _codex_paths(_cwd: str | None) -> list[Path]:
     # A folder per year, per month and per day, so the search goes all the
     # way down rather than one level.
     return _globbed(_home() / ".codex" / "sessions", "**/*.jsonl")
 
 
-def _codex_session(_path: Path, record: dict) -> Optional[tuple[str, str]]:
+def _codex_session(_path: Path, record: dict) -> tuple[str, str] | None:
     if record.get("type") != "session_meta":
         return None
     payload = record.get("payload")
@@ -691,12 +691,12 @@ def _commandcode_transcript(path: Path) -> bool:
     return not any(name.endswith(f"{side}.jsonl") for side in _COMMANDCODE_SIDECARS)
 
 
-def _commandcode_paths(_cwd: Optional[str]) -> List[Path]:
+def _commandcode_paths(_cwd: str | None) -> list[Path]:
     root = _home() / ".commandcode" / "projects"
     return [path for path in _globbed(root, "*/*.jsonl") if _commandcode_transcript(path)]
 
 
-def _commandcode_session(_path: Path, record: dict) -> Optional[tuple[str, str]]:
+def _commandcode_session(_path: Path, record: dict) -> tuple[str, str] | None:
     if record.get("type") != "session":
         return None
     return str(record.get("id") or ""), str(record.get("cwd") or "")
@@ -736,13 +736,13 @@ _COMMANDCODE = _JsonlFormat(
 # conversation. A subagent's messages carry ``parentToolCallId`` and stay out.
 
 
-def _copilot_paths(_cwd: Optional[str]) -> List[Path]:
+def _copilot_paths(_cwd: str | None) -> list[Path]:
     home = os.environ.get("COPILOT_HOME", "").strip()
     root = Path(home) if home else _home() / ".copilot"
     return _globbed(root / "session-state", "*/events.jsonl")
 
 
-def _copilot_session(_path: Path, record: dict) -> Optional[tuple[str, str]]:
+def _copilot_session(_path: Path, record: dict) -> tuple[str, str] | None:
     if record.get("type") != "session.start":
         return None
     data = record.get("data")
@@ -815,7 +815,7 @@ def _hermes_db_path() -> Path:
     return root / "state.db"
 
 
-def _hermes_query(sql: str, params: Sequence = ()) -> List[dict]:
+def _hermes_query(sql: str, params: Sequence = ()) -> list[dict]:
     """Run one read-only query against Hermes' store, wherever it lives.
 
     Two routes, because Hermes keeps its store in WAL mode and that decides
@@ -873,7 +873,7 @@ def _hermes_connect(path: Path):
         return None
 
 
-def _hermes_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _hermes_entries(cwd: str | None) -> list[HistoryEntry]:
     path = _hermes_db_path()
     modified = _mtime(path) if path.is_file() else 0.0
     # Hermes titles its own conversations, so unlike the other backends there is
@@ -888,7 +888,7 @@ def _hermes_entries(cwd: Optional[str]) -> List[HistoryEntry]:
         LIMIT 500
         """
     )
-    entries: List[HistoryEntry] = []
+    entries: list[HistoryEntry] = []
 
     for row in rows:
         session_id = str(row.get("id") or "")
@@ -924,7 +924,7 @@ def _hermes_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _hermes_turns_for(session_id: str) -> List[HistoryTurn]:
+def _hermes_turns_for(session_id: str) -> list[HistoryTurn]:
     """Read one Hermes conversation back as prompt-and-response turns.
 
     Which store is consulted is decided by :func:`_hermes_query`, so this does
@@ -941,7 +941,7 @@ def _hermes_turns_for(session_id: str) -> List[HistoryTurn]:
         (session_id, _HERMES_MAX_ROWS),
     )
 
-    turns: List[HistoryTurn] = []
+    turns: list[HistoryTurn] = []
     for row in rows:
         role = str(row.get("role") or "")
         if role in _HERMES_SKIP_ROLES:
@@ -962,7 +962,7 @@ def _hermes_turns_for(session_id: str) -> List[HistoryTurn]:
     return turns
 
 
-def _hermes_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _hermes_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     """Reader signature the public API uses. See :func:`load_turns`.
 
     Hermes' entries all share one store, so the session id has to come from the
@@ -989,7 +989,7 @@ LIMIT 500
 """
 
 
-def _muse_query() -> List[dict]:
+def _muse_query() -> list[dict]:
     """Every conversation Muse's index knows, newest first.
 
     A store on this machine is opened directly, read-only. On Windows the
@@ -1017,8 +1017,8 @@ def _muse_query() -> List[dict]:
     return wsl_muse_sqlite_query(_MUSE_LIST_SQL)
 
 
-def _muse_entries(cwd: Optional[str]) -> List[HistoryEntry]:
-    entries: List[HistoryEntry] = []
+def _muse_entries(cwd: str | None) -> list[HistoryEntry]:
+    entries: list[HistoryEntry] = []
     for row in _muse_query():
         session_id = str(row.get("session_id") or "")
         if not session_id:
@@ -1051,7 +1051,7 @@ def _muse_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _muse_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _muse_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     """One Muse conversation read back as prompt-and-response turns."""
     from muse_backend import muse_session_log_text, parse_muse_transcript
 
@@ -1076,7 +1076,7 @@ _CODEX_STATE_DB = "state_5.sqlite"
 _CODEX_HISTORY_DB = "thread_history_1.sqlite"
 
 
-def _codex_db_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _codex_db_entries(cwd: str | None) -> list[HistoryEntry]:
     path = _home() / ".codex" / _CODEX_STATE_DB
     connection = _hermes_connect(path) if source_is_file(path) else None
     if connection is None:
@@ -1091,7 +1091,7 @@ def _codex_db_entries(cwd: Optional[str]) -> List[HistoryEntry]:
         return []
     finally:
         connection.close()
-    entries: List[HistoryEntry] = []
+    entries: list[HistoryEntry] = []
     for row in rows:
         session_cwd = str(row["cwd"] or "").removeprefix("\\\\?\\")
         if cwd and not _same_dir(session_cwd, cwd):
@@ -1116,7 +1116,7 @@ def _codex_db_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _codex_db_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _codex_db_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     path = _home() / ".codex" / _CODEX_HISTORY_DB
     connection = _hermes_connect(path) if source_is_file(path) else None
     if connection is None:
@@ -1156,14 +1156,14 @@ def _codex_db_turns(entry: HistoryEntry) -> List[HistoryTurn]:
     return list(turns.values())
 
 
-def _codex_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _codex_entries(cwd: str | None) -> list[HistoryEntry]:
     """Codex conversations from its databases, plus any older JSONL rollouts."""
     entries = _codex_db_entries(cwd)
     known = {entry.session_id for entry in entries}
     return entries + [e for e in _jsonl_entries(_CODEX, cwd) if e.session_id not in known]
 
 
-def _codex_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _codex_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     turns = _codex_db_turns(entry)
     if turns:
         return turns
@@ -1183,7 +1183,7 @@ def _codex_turns(entry: HistoryEntry) -> List[HistoryTurn]:
 # ----- muse.ai -----
 
 
-def _museai_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _museai_entries(cwd: str | None) -> list[HistoryEntry]:
     """muse.ai's main chat and side chats, wherever they were started.
 
     They live on the agent's own machine and belong to no folder here, so they
@@ -1196,7 +1196,7 @@ def _museai_entries(cwd: Optional[str]) -> List[HistoryEntry]:
         return []
     from museai_backend import museai_chats
 
-    entries: List[HistoryEntry] = []
+    entries: list[HistoryEntry] = []
     for chat in museai_chats():
         try:
             stamp = time.mktime(time.strptime(str(chat.get("updated") or ""), "%Y-%m-%d %H:%M"))
@@ -1220,7 +1220,7 @@ def _museai_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _museai_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _museai_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     from museai_backend import museai_chat_snapshot
 
     turns, sequence = museai_chat_snapshot(entry.session_id)
@@ -1250,7 +1250,7 @@ def _git_root_name(cwd: str) -> str:
     return ""
 
 
-def _freebuff_chat_buckets(cwd: Optional[str]) -> List[Path]:
+def _freebuff_chat_buckets(cwd: str | None) -> list[Path]:
     root = _home() / ".config" / "manicode" / "projects"
     if cwd:
         names = [name for name in (Path(cwd).name, _git_root_name(cwd)) if name]
@@ -1266,7 +1266,7 @@ def _freebuff_chat_buckets(cwd: Optional[str]) -> List[Path]:
         return []
 
 
-def _freebuff_messages(chat: Path) -> List[dict]:
+def _freebuff_messages(chat: Path) -> list[dict]:
     try:
         payload = json.loads((chat / "chat-messages.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -1307,7 +1307,7 @@ def _freebuff_first_prompt(chat: Path) -> str:
     return ""
 
 
-def _freebuff_entry(chat: Path, bucket_folder: str) -> Optional[HistoryEntry]:
+def _freebuff_entry(chat: Path, bucket_folder: str) -> HistoryEntry | None:
     first = _freebuff_first_prompt(chat)
     if not first:
         return None
@@ -1322,8 +1322,8 @@ def _freebuff_entry(chat: Path, bucket_folder: str) -> Optional[HistoryEntry]:
     )
 
 
-def _freebuff_entries(cwd: Optional[str]) -> List[HistoryEntry]:
-    entries: List[HistoryEntry] = []
+def _freebuff_entries(cwd: str | None) -> list[HistoryEntry]:
+    entries: list[HistoryEntry] = []
     seen: set[str] = set()
     for bucket in _freebuff_chat_buckets(cwd):
         # ".../projects/<project>/chats" — the project is what to display.
@@ -1346,7 +1346,7 @@ def _freebuff_entries(cwd: Optional[str]) -> List[HistoryEntry]:
 _FREEBUFF_DESKTOP_DB = "desktop-v2.db"
 
 
-def _freebuff_desktop_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _freebuff_desktop_entries(cwd: str | None) -> list[HistoryEntry]:
     """FreeBuff Desktop's threads: one SQLite store per project it has opened.
 
     The desktop app does not use the CLI's chat folders; each project gets
@@ -1354,7 +1354,7 @@ def _freebuff_desktop_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     (measured 2026-10-08). Archived threads are left out, as the app hides them.
     """
     root = _home() / ".config" / "freebuff-desktop" / "projects"
-    entries: List[HistoryEntry] = []
+    entries: list[HistoryEntry] = []
     for db in _globbed(root, f"*/{_FREEBUFF_DESKTOP_DB}"):
         connection = _hermes_connect(db)
         if connection is None:
@@ -1396,7 +1396,7 @@ def _freebuff_desktop_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _freebuff_desktop_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _freebuff_desktop_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     connection = _hermes_connect(Path(entry.path))
     if connection is None:
         return []
@@ -1410,7 +1410,7 @@ def _freebuff_desktop_turns(entry: HistoryEntry) -> List[HistoryTurn]:
         return []
     finally:
         connection.close()
-    turns: List[HistoryTurn] = []
+    turns: list[HistoryTurn] = []
     for row in rows:
         try:
             parts = json.loads(row["parts_json"] or "[]")
@@ -1438,19 +1438,19 @@ def _freebuff_desktop_turns(entry: HistoryEntry) -> List[HistoryTurn]:
     return turns
 
 
-def _freebuff_all_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _freebuff_all_entries(cwd: str | None) -> list[HistoryEntry]:
     return _freebuff_entries(cwd) + _freebuff_desktop_entries(cwd)
 
 
-def _freebuff_any_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _freebuff_any_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     if entry.path.endswith(_FREEBUFF_DESKTOP_DB):
         return _freebuff_desktop_turns(entry)
     return _freebuff_turns(entry)
 
 
-def _freebuff_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _freebuff_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     chat = Path(entry.path)
-    turns: List[HistoryTurn] = []
+    turns: list[HistoryTurn] = []
     for message in _freebuff_messages(chat):
         variant = message.get("variant")
         if variant == "user":
@@ -1463,7 +1463,7 @@ def _freebuff_turns(entry: HistoryEntry) -> List[HistoryTurn]:
         blocks = message.get("blocks")
         if not isinstance(blocks, list):
             continue
-        answer: List[str] = []
+        answer: list[str] = []
         for block in blocks:
             if not isinstance(block, dict) or block.get("type") != "text":
                 continue
@@ -1498,7 +1498,7 @@ def _opencode_db() -> Path:
     return root / "opencode" / "opencode.db"
 
 
-def _opencode_connect() -> Optional["sqlite3.Connection"]:
+def _opencode_connect() -> sqlite3.Connection | None:
     """A read-only connection, or None when there is no database to read.
 
     Opened by URI so that opening it can never create one, and so a database
@@ -1521,7 +1521,7 @@ def _opencode_connect() -> Optional["sqlite3.Connection"]:
 _OPENCODE_UNTITLED = re.compile(r"^(?:new session\b|untitled\b)", re.IGNORECASE)
 
 
-def _opencode_first_prompt(connection: "sqlite3.Connection", session_id: str) -> str:
+def _opencode_first_prompt(connection: sqlite3.Connection, session_id: str) -> str:
     """The first thing typed into a conversation, for titling it.
 
     Whose message a part belongs to is decided from the message record rather
@@ -1562,7 +1562,7 @@ _FIRST_PROMPT_CACHE: dict[str, str] = {}
 _FIRST_PROMPT_CACHE_AT: tuple[str, float] = ("", 0.0)
 
 
-def _opencode_first_prompt_cached(connection: "sqlite3.Connection", session_id: str) -> str:
+def _opencode_first_prompt_cached(connection: sqlite3.Connection, session_id: str) -> str:
     """The first prompt, read once per session per database state."""
     global _FIRST_PROMPT_CACHE_AT
     db = _opencode_db()
@@ -1578,11 +1578,11 @@ def _opencode_first_prompt_cached(connection: "sqlite3.Connection", session_id: 
     return text
 
 
-def _opencode_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _opencode_entries(cwd: str | None) -> list[HistoryEntry]:
     connection = _opencode_connect()
     if connection is None:
         return []
-    entries: List[HistoryEntry] = []
+    entries: list[HistoryEntry] = []
     try:
         # Subagents get sessions of their own, hung off the one that started
         # them. Only the conversations a person actually had belong in the
@@ -1635,11 +1635,11 @@ def _opencode_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _opencode_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     connection = _opencode_connect()
     if connection is None:
         return []
-    turns: List[HistoryTurn] = []
+    turns: list[HistoryTurn] = []
     try:
         roles = {}
         for message_id, data in connection.execute(
@@ -1710,7 +1710,7 @@ def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
 
 # ----- Public API -----
 
-_LISTERS: dict[str, Callable[[Optional[str]], List[HistoryEntry]]] = {
+_LISTERS: dict[str, Callable[[str | None], list[HistoryEntry]]] = {
     BACKEND_CLAUDE: _claude_entries,
     BACKEND_CODEX: _codex_entries,
     BACKEND_FREEBUFF: _freebuff_all_entries,
@@ -1725,7 +1725,7 @@ _LISTERS: dict[str, Callable[[Optional[str]], List[HistoryEntry]]] = {
 # Readers are given the whole entry rather than its path, because opencode and
 # Hermes each keep every conversation in one database: what identifies their
 # transcript is the session id, not a file of its own.
-_READERS: dict[str, Callable[[HistoryEntry], List[HistoryTurn]]] = {
+_READERS: dict[str, Callable[[HistoryEntry], list[HistoryTurn]]] = {
     BACKEND_CLAUDE: partial(_jsonl_turns, _CLAUDE),
     BACKEND_CODEX: _codex_turns,
     BACKEND_FREEBUFF: _freebuff_any_turns,
@@ -1739,10 +1739,10 @@ _READERS: dict[str, Callable[[HistoryEntry], List[HistoryTurn]]] = {
 
 
 def list_history(
-    backend: Optional[str] = None,
-    cwd: Optional[str] = None,
+    backend: str | None = None,
+    cwd: str | None = None,
     limit: int = 300,
-) -> List[HistoryEntry]:
+) -> list[HistoryEntry]:
     """Past conversations, newest first.
 
     ``backend`` limits the list to one provider; ``None`` returns them all.
@@ -1755,9 +1755,9 @@ def list_history(
     else:
         backends = [normalize_backend(backend)]
 
-    entries: List[HistoryEntry] = []
+    entries: list[HistoryEntry] = []
 
-    def load(name: str) -> tuple[List[HistoryEntry], list[HistoryIssue]]:
+    def load(name: str) -> tuple[list[HistoryEntry], list[HistoryIssue]]:
         # Each worker owns its diagnostics; merge in backend order on the
         # calling thread, so simultaneous scans cannot exchange warnings.
         with history_diagnostics() as issues, backend_scope(name):
@@ -1768,7 +1768,7 @@ def list_history(
                 result = []
         return result, issues
 
-    def merge(result: tuple[List[HistoryEntry], list[HistoryIssue]]) -> None:
+    def merge(result: tuple[list[HistoryEntry], list[HistoryIssue]]) -> None:
         found, issues = result
         entries.extend(found)
         record_issues(issues)
@@ -1784,13 +1784,13 @@ def list_history(
     return entries[: max(0, limit)]
 
 
-def load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def load_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     """Read turns while attaching diagnostics to this entry's backend."""
     with backend_scope(normalize_backend(entry.backend)):
         return _load_turns(entry)
 
 
-def _load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _load_turns(entry: HistoryEntry) -> list[HistoryTurn]:
     """Read one past conversation back as prompt-and-response turns.
 
     Turns with neither a prompt nor an answer are dropped, so an aborted run
@@ -1876,7 +1876,7 @@ def restore_tasks(entry: HistoryEntry) -> TaskList:
     return tasks
 
 
-def describe_age(modified: float, now: Optional[float] = None) -> str:
+def describe_age(modified: float, now: float | None = None) -> str:
     """When a conversation was last touched, said the way a person would.
 
     Spoken by a screen reader, so it avoids clock arithmetic the listener would

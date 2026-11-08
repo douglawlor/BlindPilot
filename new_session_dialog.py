@@ -21,7 +21,6 @@ import signal
 import subprocess
 import threading
 import time
-from typing import Optional
 
 import wx
 
@@ -105,7 +104,7 @@ class NewSessionDialog(wx.Dialog):
     def __init__(
         self,
         parent: wx.Window,
-        default_dir: Optional[str] = None,
+        default_dir: str | None = None,
         remote_label: str = "",
     ):
         super().__init__(parent, title="New Session")
@@ -114,8 +113,8 @@ class NewSessionDialog(wx.Dialog):
         self._remote_label = remote_label.strip()
         self.path = ""
         self.title_text = ""
-        self.worktree_box: Optional[wx.CheckBox] = None
-        self.branch_box: Optional[wx.TextCtrl] = None
+        self.worktree_box: wx.CheckBox | None = None
+        self.branch_box: wx.TextCtrl | None = None
         self._github_serial = 0
         self._github_cancel = threading.Event()
         self._github_cancel.set()
@@ -273,7 +272,7 @@ class NewSessionDialog(wx.Dialog):
 
     def _run_github(
         self, command: list[str], timeout: int, cancelled: threading.Event
-    ) -> tuple[Optional[subprocess.CompletedProcess[str]], str]:
+    ) -> tuple[subprocess.CompletedProcess[str] | None, str]:
         if cancelled.is_set():
             return None, ""
         try:
@@ -360,7 +359,7 @@ class NewSessionDialog(wx.Dialog):
             announce("GitHub operation cancelled")
 
     def _github_listed(
-        self, serial: int, listed: Optional[subprocess.CompletedProcess[str]], error: str
+        self, serial: int, listed: subprocess.CompletedProcess[str] | None, error: str
     ) -> None:
         if not self or serial != self._github_serial:
             return
@@ -411,7 +410,7 @@ class NewSessionDialog(wx.Dialog):
         serial: int,
         repo: str,
         target: str,
-        cloned: Optional[subprocess.CompletedProcess[str]],
+        cloned: subprocess.CompletedProcess[str] | None,
         error: str,
     ) -> None:
         if not self or serial != self._github_serial:

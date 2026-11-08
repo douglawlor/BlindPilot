@@ -14,7 +14,7 @@ calls are patched here, where the calls are made from -- for example
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import wx
 
@@ -131,7 +131,7 @@ class SavedPromptsDialog(wx.Dialog):
         self._refresh(selection)
         self.list_box.SetFocus()
 
-    def _ask(self, name: str, text: str) -> Optional[dict]:
+    def _ask(self, name: str, text: str) -> dict | None:
         """Name, then text. None if either was cancelled or left blank."""
         with wx.TextEntryDialog(self, "Prompt name:", "Saved Prompt", name) as dlg:
             if dlg.ShowModal() != wx.ID_OK or not dlg.GetValue().strip():

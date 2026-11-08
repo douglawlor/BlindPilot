@@ -15,7 +15,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 __all__ = [
     "HistoryIssue",
@@ -65,7 +64,7 @@ _ADVICE = {
 _ADVICE_DEFAULT = "Select Reload in Recent Conversations to read the sources again."
 
 
-_ISSUES: ContextVar[Optional[list[HistoryIssue]]] = ContextVar("history_issues", default=None)
+_ISSUES: ContextVar[list[HistoryIssue] | None] = ContextVar("history_issues", default=None)
 _ISSUE_BACKEND: ContextVar[str] = ContextVar("history_issue_backend", default="")
 
 

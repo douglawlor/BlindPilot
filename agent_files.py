@@ -17,7 +17,6 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from agent_backends import (
     BACKEND_CLAUDE,
@@ -57,7 +56,7 @@ def _front_matter(path: Path) -> dict[str, str]:
     return fields
 
 
-def claude_files(cwd: Optional[str]) -> dict[str, list[tuple[str, str]]]:
+def claude_files(cwd: str | None) -> dict[str, list[tuple[str, str]]]:
     """Every file Claude Code keeps about you, as {kind: [(path, label)]}.
 
     Your own instructions, memories, skills, agents, commands and settings
@@ -118,7 +117,7 @@ def claude_files(cwd: Optional[str]) -> dict[str, list[tuple[str, str]]]:
     return found
 
 
-def memory_folders(cwd: Optional[str]) -> list[Path]:
+def memory_folders(cwd: str | None) -> list[Path]:
     """Where a new memory can go: every memory folder Claude Code has, and
     the active tab's own (first, made on save) when it has none yet."""
     home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
@@ -208,7 +207,7 @@ class AgentFiles:
     kind: str
     files: list[tuple[str, str]]
     editable: str = ""
-    home: Optional[Path] = None
+    home: Path | None = None
 
 
 def _commandcode_home() -> Path:
@@ -392,7 +391,7 @@ def save_entry(key: str, editable: str, text: str) -> None:
     _replace_agent_file(file, new)
 
 
-def agent_files(cwd: Optional[str]) -> list[AgentFiles]:
+def agent_files(cwd: str | None) -> list[AgentFiles]:
     """What every backend keeps about you on this computer, kind by kind.
 
     Kinds that are empty are left out, except the ones Add can start: Claude

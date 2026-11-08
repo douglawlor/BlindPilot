@@ -53,7 +53,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Any
+from collections.abc import Callable, Iterable
 
 # The capability tiers, cheapest first. A tier is a human judgement; only the
 # price ranking inside it is automatic.
@@ -201,12 +202,12 @@ class _FileCache:
     """One cached file read: its source, the source's mtime, and when it was read."""
 
     source: str = ""
-    mtime: Optional[float] = None
+    mtime: float | None = None
     cached_at: float = 0.0
     data: dict = field(default_factory=dict)
 
 
-def _cache_fresh(cache: _FileCache, source: str, mtime: Optional[float], ttl: float) -> bool:
+def _cache_fresh(cache: _FileCache, source: str, mtime: float | None, ttl: float) -> bool:
     """Whether a cached read still matches its source and its TTL has not run out."""
     return (
         time.monotonic() - cache.cached_at < ttl and cache.source == source and cache.mtime == mtime
@@ -223,7 +224,7 @@ class Route:
     model: str
     effort: str
     tier: str
-    cost: Optional[float] = None
+    cost: float | None = None
     priced: bool = False
     cooldown: bool = False
 
@@ -276,7 +277,7 @@ def classify(task: str) -> str:
     return STANDARD
 
 
-def is_peak(now: Optional[datetime] = None) -> bool:
+def is_peak(now: datetime | None = None) -> bool:
     """Whether DeepSeek's peak window is in effect (Mon-Fri 01-04 & 06-10 UTC)."""
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
@@ -300,7 +301,7 @@ def _rate(value: object, default: float = 0.0) -> float:
         return default
 
 
-def model_cost(entry: dict, peak: bool = False, context_tokens: Optional[int] = None) -> float:
+def model_cost(entry: dict, peak: bool = False, context_tokens: int | None = None) -> float:
     """A model's blended cost over the typical request profile.
 
     ``context_tokens`` scales the cache-read weight to a conversation of that
@@ -391,7 +392,7 @@ def plan_eligible(min_plan: str, max_plan: str = "go") -> bool:
     return needed <= _PLAN_RANK.get(max_plan, 1)
 
 
-def _leaderboard_rank(*sources: Optional[Iterable[str]]) -> dict:
+def _leaderboard_rank(*sources: Iterable[str] | None) -> dict:
     """Map model id (casefolded) to a popularity rank from the given sources.
 
     Lower is more popular. An empty mapping means "no preference".
@@ -415,15 +416,15 @@ def select(
     tier: str,
     catalog: dict,
     *,
-    max_plan: Optional[str] = None,
+    max_plan: str | None = None,
     include_free: bool = True,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     cooldown: bool = False,
-    exclude_models: Optional[set[str]] = None,
-    context_tokens: Optional[int] = None,
-    leaderboard: Optional[Iterable[str]] = None,
-    external_leaderboard: Optional[Iterable[str]] = None,
-) -> Optional[Route]:
+    exclude_models: set[str] | None = None,
+    context_tokens: int | None = None,
+    leaderboard: Iterable[str] | None = None,
+    external_leaderboard: Iterable[str] | None = None,
+) -> Route | None:
     """The cheapest eligible model for a tier, or None when none qualifies.
 
     Free models are only ever used for the ``quick`` tier: a standard or deep
@@ -491,16 +492,16 @@ def select(
 def route(
     task: str,
     *,
-    catalog: Optional[dict] = None,
-    max_plan: Optional[str] = None,
+    catalog: dict | None = None,
+    max_plan: str | None = None,
     include_free: bool = True,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     static: bool = False,
-    exclude_models: Optional[set[str]] = None,
-    context_tokens: Optional[int] = None,
-    cancel_event: Optional[threading.Event] = None,
-    leaderboard: Optional[Iterable[str]] = None,
-    external_leaderboard: Optional[Iterable[str]] = None,
+    exclude_models: set[str] | None = None,
+    context_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
+    leaderboard: Iterable[str] | None = None,
+    external_leaderboard: Iterable[str] | None = None,
     use_external_leaderboard: bool = False,
 ) -> Route:
     """The model and effort for a task.
@@ -562,12 +563,12 @@ def route(
 
 def best_free_model(
     *,
-    catalog: Optional[dict] = None,
+    catalog: dict | None = None,
     exclude_model: str = "",
-    max_plan: Optional[str] = None,
-    now: Optional[datetime] = None,
-    cancel_event: Optional[threading.Event] = None,
-) -> Optional[Route]:
+    max_plan: str | None = None,
+    now: datetime | None = None,
+    cancel_event: threading.Event | None = None,
+) -> Route | None:
     """A coding-focused free fallback confirmed by the live CLI list and catalog.
 
     A free model whose providers were just recorded at capacity is skipped
@@ -616,7 +617,7 @@ def best_free_model(
     return None
 
 
-def catalog_missing_candidates(catalog: Optional[dict] = None) -> dict:
+def catalog_missing_candidates(catalog: dict | None = None) -> dict:
     """Tier candidates the catalog does not currently offer.
 
     A renamed or retired model is not a crash -- ``select`` already skips an
@@ -634,7 +635,7 @@ def catalog_missing_candidates(catalog: Optional[dict] = None) -> dict:
     return missing
 
 
-def catalog_is_complete(catalog: Optional[dict] = None) -> bool:
+def catalog_is_complete(catalog: dict | None = None) -> bool:
     """Whether every tier candidate appears in the catalog."""
     return not catalog_missing_candidates(catalog)
 
@@ -741,7 +742,7 @@ def _catalog_candidates():
                     yield candidate
 
 
-def _load_catalog_file() -> tuple[str, Optional[Path], Optional[float]]:
+def _load_catalog_file() -> tuple[str, Path | None, float | None]:
     """The first readable catalog's text, its path and its mtime."""
     for path in _catalog_candidates():
         try:
@@ -787,7 +788,7 @@ def price_catalog() -> dict:
     return {}
 
 
-def live_price_catalog(*, cancel_event: Optional[threading.Event] = None) -> dict:
+def live_price_catalog(*, cancel_event: threading.Event | None = None) -> dict:
     """Priced models that the selected Command Code CLI lists right now."""
     from commandcode_backend import commandcode_model_options
 
@@ -853,7 +854,7 @@ _USAGE_STATE_LOCK = threading.Lock()
 _USAGE_STATE_CACHE = _FileCache()
 
 
-def _remember_usage_state(path: Path, mtime: Optional[float], data: dict) -> None:
+def _remember_usage_state(path: Path, mtime: float | None, data: dict) -> None:
     """Refresh the read cache, so a recorded stop is read straight back."""
     global _USAGE_STATE_CACHE
     _USAGE_STATE_CACHE = _FileCache(str(path), mtime, time.monotonic(), data)
@@ -960,7 +961,7 @@ def _read_usage_state_cached() -> dict:
     return data
 
 
-def _parse_deadline(raw: object) -> Optional[datetime]:
+def _parse_deadline(raw: object) -> datetime | None:
     try:
         deadline = datetime.fromisoformat(raw)  # type: ignore[arg-type]
     except (ValueError, TypeError):
@@ -987,7 +988,7 @@ def _has_longer_stop(state: dict, deadline: datetime, *path: str) -> bool:
 
 def _write_usage_state(path: Path, state: dict) -> None:
     """Replace the state file atomically, then refresh the read cache."""
-    temporary_path: Optional[Path] = None
+    temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -1037,7 +1038,7 @@ def _update_usage_state(check: Callable[[dict], bool], mutate: Callable[[dict], 
     return True
 
 
-def _cooldown_minutes(code: int) -> Optional[int]:
+def _cooldown_minutes(code: int) -> int | None:
     """How long a limit exit code withholds paid models."""
     if code == 10:
         raw = os.environ.get(_CREDIT_COOLDOWN_ENV, "")
@@ -1049,7 +1050,7 @@ def _cooldown_minutes(code: int) -> Optional[int]:
     return _LIMIT_COOLDOWN_MINUTES.get(code)
 
 
-def record_limit_hit(code: int, now: Optional[datetime] = None) -> bool:
+def record_limit_hit(code: int, now: datetime | None = None) -> bool:
     """Note a rate (5) or credit (10) stop so routing avoids paid models.
 
     Best-effort but honest: False means the stop could NOT be recorded (the
@@ -1077,7 +1078,7 @@ def record_limit_hit(code: int, now: Optional[datetime] = None) -> bool:
     )
 
 
-def record_capacity_hit(model: str, now: Optional[datetime] = None) -> bool:
+def record_capacity_hit(model: str, now: datetime | None = None) -> bool:
     """Note that a model's providers reported themselves at capacity.
 
     Keyed by model id in the same state file as a rate or credit stop, and
@@ -1107,7 +1108,7 @@ def record_capacity_hit(model: str, now: Optional[datetime] = None) -> bool:
     )
 
 
-def cooling_down(now: Optional[datetime] = None) -> bool:
+def cooling_down(now: datetime | None = None) -> bool:
     """Whether a recorded rate or credit stop is still in effect."""
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
@@ -1155,7 +1156,7 @@ def _model_feedback_path() -> Path:
         return Path.home() / ".blindpilot" / "commandcode-model-feedback.json"
 
 
-def _read_model_feedback(path: Optional[Path] = None) -> list:
+def _read_model_feedback(path: Path | None = None) -> list:
     target = path if path is not None else _model_feedback_path()
     try:
         if target.is_file():
@@ -1227,7 +1228,7 @@ def _model_feedback_file_lock(path: Path):
     return _Ctx()
 
 
-def _write_model_feedback(outcomes: list, path: Optional[Path] = None) -> None:
+def _write_model_feedback(outcomes: list, path: Path | None = None) -> None:
     target = path if path is not None else _model_feedback_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     # Prune outcomes older than the retention window so the file stays small.
@@ -1243,7 +1244,7 @@ def _write_model_feedback(outcomes: list, path: Optional[Path] = None) -> None:
         except (ValueError, TypeError, AttributeError):
             pass
         kept.append(entry)
-    temporary_path: Optional[Path] = None
+    temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -1283,7 +1284,7 @@ def record_model_outcome(
     *,
     success: bool = False,
     infra_failure: bool = False,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> bool:
     """Record one outcome for *model* in the feedback log.
 
@@ -1310,7 +1311,7 @@ def record_model_outcome(
     return _update_model_feedback(mutate)
 
 
-def _sorted_feedback(now: Optional[datetime] = None) -> list:
+def _sorted_feedback(now: datetime | None = None) -> list:
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
@@ -1328,7 +1329,7 @@ def _sorted_feedback(now: Optional[datetime] = None) -> list:
     return decorated
 
 
-def model_penalties(now: Optional[datetime] = None) -> set:
+def model_penalties(now: datetime | None = None) -> set:
     """Model ids (casefolded) with too many infra failures in the last week.
 
     A success on a model clears its accumulated failures, mirroring the
@@ -1353,12 +1354,12 @@ def model_penalties(now: Optional[datetime] = None) -> set:
     return {model for model, count in failures.items() if count >= _MODEL_FEEDBACK_FAILURE_LIMIT}
 
 
-def penalized_models(now: Optional[datetime] = None) -> set:
+def penalized_models(now: datetime | None = None) -> set:
     """Alias for ``model_penalties``."""
     return model_penalties(now)
 
 
-def model_leaderboard(*, weeks: int = 4, now: Optional[datetime] = None) -> dict:
+def model_leaderboard(*, weeks: int = 4, now: datetime | None = None) -> dict:
     """Week-by-week leaderboard of model outcomes.
 
     Returns a mapping of ISO-week key (``YYYY-Www``) to a list of rows sorted
@@ -1417,12 +1418,12 @@ def model_leaderboard(*, weeks: int = 4, now: Optional[datetime] = None) -> dict
     return result
 
 
-def leaderboard(*, weeks: int = 4, now: Optional[datetime] = None) -> dict:
+def leaderboard(*, weeks: int = 4, now: datetime | None = None) -> dict:
     """Alias for ``model_leaderboard``: which models are on the board, week by week."""
     return model_leaderboard(weeks=weeks, now=now)
 
 
-def capacity_cooling_down(model: str, now: Optional[datetime] = None) -> bool:
+def capacity_cooling_down(model: str, now: datetime | None = None) -> bool:
     """Whether a model's providers are still recorded as at capacity."""
     if not model:
         return False

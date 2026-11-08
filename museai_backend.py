@@ -32,7 +32,6 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
 from urllib.parse import quote, urlsplit
 
 import agent_backends
@@ -54,7 +53,7 @@ def _json_from(text: str) -> object:
         return None
 
 
-def museai_status(timeout: int = 20) -> Optional[dict]:
+def museai_status(timeout: int = 20) -> dict | None:
     """``muse-cli status`` as a dict, or None when it is missing or signed out."""
     binary = agent_backends.find_backend_cli(BACKEND_MUSEAI)
     if not binary:
@@ -113,7 +112,7 @@ def museai_chats() -> list[dict]:
     return [c for c in chats if c.get("session_id") and not c.get("archived")]
 
 
-def museai_main_session_id() -> Optional[str]:
+def museai_main_session_id() -> str | None:
     return next((str(c["session_id"]) for c in museai_chats() if c.get("thread") is False), None)
 
 
@@ -327,7 +326,7 @@ def _museai_id(item: dict, *keys: str) -> str:
     raise ValueError("This muse.ai item has no usable ID. Refresh and try again.")
 
 
-def _museai_call(method: str, params: Optional[dict] = None, body: Optional[dict] = None) -> dict:
+def _museai_call(method: str, params: dict | None = None, body: dict | None = None) -> dict:
     args = ["raw", method]
     for key, value in (params or {}).items():
         args += ["--param", f"{key}={quote(value, safe='')}"]
@@ -345,7 +344,7 @@ def museai_idea_id(item: dict) -> str:
     return _museai_id(item, "ideaCardId", "id")
 
 
-def museai_run_idea(item: dict, item_ids: Optional[list[str]] = None) -> dict:
+def museai_run_idea(item: dict, item_ids: list[str] | None = None) -> dict:
     idea_id = museai_idea_id(item)
     body: dict = {"ideaCardId": idea_id, "mode": "full"}
     if item_ids is not None:
@@ -541,7 +540,7 @@ def museai_latest_seq(session_id: str) -> int:
     return max(seqs, default=0)
 
 
-def find_uv() -> Optional[str]:
+def find_uv() -> str | None:
     """uv on PATH, or in the per-user bin folder its own installer uses.
 
     A GUI process inherits a PATH that often lacks ~/.local/bin, so the
@@ -556,7 +555,7 @@ def find_uv() -> Optional[str]:
     return str(candidate) if candidate.is_file() else None
 
 
-def _usable_python(candidate: Optional[str]) -> Optional[str]:
+def _usable_python(candidate: str | None) -> str | None:
     """A Python that is really Python, or None.
 
     The python.exe a fresh Windows puts on PATH is the Microsoft Store
@@ -570,7 +569,7 @@ def _usable_python(candidate: Optional[str]) -> Optional[str]:
     return candidate
 
 
-def museai_install_argv(upgrade: bool = False) -> Optional[list[str]]:
+def museai_install_argv(upgrade: bool = False) -> list[str] | None:
     """How to install (or upgrade) muse-cli: uv first, then pip for this user.
 
     None when this machine has neither uv nor a usable Python; the caller

@@ -14,7 +14,6 @@ starts in the list.
 
 from __future__ import annotations
 
-from typing import List
 
 import wx
 
@@ -28,7 +27,7 @@ PAD_DIALOG = 12
 class SlashCommandDialog(wx.Dialog):
     """Pick a slash command from a labeled list, in place of a stock choice dialog."""
 
-    def __init__(self, parent: wx.Window, message: str, labels: List[str]):
+    def __init__(self, parent: wx.Window, message: str, labels: list[str]):
         super().__init__(
             parent,
             title="Slash Commands",
@@ -61,7 +60,7 @@ class SlashCommandDialog(wx.Dialog):
     def GetSelection(self) -> int:
         return self.list_box.GetSelection()
 
-    def SetLabels(self, labels: List[str]) -> None:
+    def SetLabels(self, labels: list[str]) -> None:
         """Replace the list while it is open, keeping the same row selected."""
         rows = self.list_box.GetRows()
         index = self.list_box.GetSelection()

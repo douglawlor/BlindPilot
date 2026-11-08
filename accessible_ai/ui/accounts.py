@@ -5,7 +5,7 @@ import logging
 import os
 import sqlite3
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 import wx
 

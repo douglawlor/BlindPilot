@@ -28,7 +28,7 @@ def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def _settings() -> "blindpilot_app._RemoteHermes":
+def _settings() -> blindpilot_app._RemoteHermes:
     return blindpilot_app._RemoteHermes()
 
 

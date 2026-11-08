@@ -39,7 +39,8 @@ import time
 import urllib.parse
 from http.cookiejar import CookieJar
 from pathlib import Path
-from typing import Any, Optional, Protocol, Sequence
+from typing import Any, Protocol
+from collections.abc import Sequence
 
 from certificates import certificate_context
 from history_status import bridge_error, read_error, report_issue
@@ -98,7 +99,7 @@ def hermes_home() -> Path:
     return Path.home() / ".hermes"
 
 
-def hermes_source_root() -> Optional[Path]:
+def hermes_source_root() -> Path | None:
     """The Hermes source tree, which is what ``-m tui_gateway.entry`` needs.
 
     Hermes installs itself under its home directory rather than into the
@@ -127,7 +128,7 @@ def hermes_source_root() -> Optional[Path]:
     return None
 
 
-def hermes_python() -> Optional[str]:
+def hermes_python() -> str | None:
     """The interpreter that can import Hermes, i.e. the one in its venv."""
     root = hermes_source_root()
     if root is None:
@@ -141,7 +142,7 @@ def hermes_python() -> Optional[str]:
     return None
 
 
-def find_hermes_cli() -> Optional[str]:
+def find_hermes_cli() -> str | None:
     """Hermes' own launcher, used for version and authentication checks."""
     found = shutil.which("hermes")
     if found:
@@ -208,7 +209,7 @@ def hermes_installed() -> bool:
 
 # Cached because every backend check would otherwise start a WSL process, and
 # the answer cannot change while the app is running.
-_WSL_HERMES: Optional[str] = None
+_WSL_HERMES: str | None = None
 _WSL_CHECKED = False
 
 # How long a history query inside WSL may take. The dialog runs this on the GUI
@@ -216,14 +217,14 @@ _WSL_CHECKED = False
 WSL_QUERY_TIMEOUT = 20.0
 
 
-def wsl_exe() -> Optional[str]:
+def wsl_exe() -> str | None:
     """Windows' WSL launcher, or None when this is not Windows."""
     if platform.system() != "Windows":
         return None
     return shutil.which("wsl.exe") or shutil.which("wsl")
 
 
-def wsl_hermes_path(timeout: int = 20) -> Optional[str]:
+def wsl_hermes_path(timeout: int = 20) -> str | None:
     """Hermes' path inside WSL, or None when there is no Hermes there."""
     global _WSL_HERMES, _WSL_CHECKED
     if _WSL_CHECKED:
@@ -256,13 +257,13 @@ def wsl_hermes_available() -> bool:
 
 
 # Cached alongside the launcher: same reasoning, same lifetime.
-_WSL_PYTHON: Optional[str] = None
+_WSL_PYTHON: str | None = None
 _WSL_PYTHON_CHECKED = False
-_WSL_STATE_DB: Optional[str] = None
+_WSL_STATE_DB: str | None = None
 _WSL_STATE_DB_CHECKED = False
 
 
-def wsl_hermes_python(timeout: int = 25) -> Optional[str]:
+def wsl_hermes_python(timeout: int = 25) -> str | None:
     """The interpreter inside WSL that can import Hermes' gateway.
 
     Hermes' launcher has no subcommand for this protocol, so the gateway has to
@@ -306,7 +307,7 @@ def wsl_hermes_python(timeout: int = 25) -> Optional[str]:
     return _WSL_PYTHON
 
 
-def wsl_state_db() -> Optional[str]:
+def wsl_state_db() -> str | None:
     """Hermes' session store inside WSL, as the POSIX path WSL sees.
 
     Both the path and Hermes' home are resolved inside WSL rather than guessed,
@@ -346,7 +347,7 @@ def wsl_state_db() -> Optional[str]:
     return _WSL_STATE_DB
 
 
-def wsl_sqlite_query(sql: str, params: "Sequence" = ()) -> "list[dict]":
+def wsl_sqlite_query(sql: str, params: Sequence = ()) -> list[dict]:
     """Run one read-only query against Hermes' store from inside WSL.
 
     The store is also reachable from Windows under \\\\wsl.localhost, but Hermes
@@ -547,7 +548,7 @@ def _http_base(url: str) -> str:
     return base[: -len("/api/ws")] if base.endswith("/api/ws") else base
 
 
-def hermes_asks_for_a_login(url: str, timeout: float = REMOTE_CONNECT_TIMEOUT) -> Optional[bool]:
+def hermes_asks_for_a_login(url: str, timeout: float = REMOTE_CONNECT_TIMEOUT) -> bool | None:
     """Whether this Hermes requires a sign-in of its own, or a session token.
 
     The two arrangements take different credentials, and Hermes does not
@@ -630,7 +631,7 @@ def mint_ws_ticket(url: str, username: str, password: str) -> tuple[str, str]:
         urllib.request.HTTPCookieProcessor(jar),
     )
 
-    def _post(path: str, body: Optional[dict]) -> dict:
+    def _post(path: str, body: dict | None) -> dict:
         data = json.dumps(body).encode() if body is not None else b""
         request = urllib.request.Request(
             base + path,
@@ -683,7 +684,7 @@ def mint_ws_ticket(url: str, username: str, password: str) -> tuple[str, str]:
     return ticket, _cookie_header(jar, url)
 
 
-def _cookie_header(jar: "CookieJar", url: str) -> str:
+def _cookie_header(jar: CookieJar, url: str) -> str:
     """The ``Cookie:`` value a WebSocket upgrade should carry, from the login's jar.
 
     ``?ticket=`` is what Hermes' own upgrade reads, but it is not the only
@@ -875,7 +876,7 @@ def _upgrade_refused_message(
     *,
     credential: str,
     verified: bool,
-    asks_for_login: Optional[bool],
+    asks_for_login: bool | None,
     refuser: str = "",
 ) -> str:
     """Explain a refused WebSocket upgrade from the evidence, not from habit.
@@ -954,7 +955,7 @@ class Transport(Protocol):
         """Write one frame. ``False`` means the peer is gone."""
         ...
 
-    def receive(self, timeout: float) -> Optional[dict]:
+    def receive(self, timeout: float) -> dict | None:
         """Read one frame, or ``None`` when nothing arrived in ``timeout``."""
         ...
 
@@ -995,7 +996,7 @@ class JsonRpcCalls:
             return self._request_id
 
     @staticmethod
-    def _rpc_frame(method: str, params: Optional[dict], request_id: Optional[int] = None) -> dict:
+    def _rpc_frame(method: str, params: dict | None, request_id: int | None = None) -> dict:
         """One frame: a request when given an id, a notification without one."""
         frame: dict = {"jsonrpc": "2.0"}
         if request_id is not None:
@@ -1029,7 +1030,7 @@ else:
 """
 
 
-def running_gateway_target() -> Optional[tuple[str, list[str]]]:
+def running_gateway_target() -> tuple[str, list[str]] | None:
     """Where to attach to a gateway already running for this home, if any.
 
     Returns ``(url, subprotocols)`` for the running gateway's WebSocket, or
@@ -1089,7 +1090,7 @@ def running_gateway_target() -> Optional[tuple[str, list[str]]]:
     return None
 
 
-def local_transport(cwd: str) -> "StdioTransport | WebSocketTransport":
+def local_transport(cwd: str) -> StdioTransport | WebSocketTransport:
     """The transport for a Hermes on this machine.
 
     A gateway already running for the configured home owns that home's
@@ -1118,13 +1119,13 @@ class StdioTransport:
     """
 
     def __init__(
-        self, cwd: str, *, argv: Optional[Sequence[str]] = None, peer: str = "Hermes"
+        self, cwd: str, *, argv: Sequence[str] | None = None, peer: str = "Hermes"
     ) -> None:
         self._cwd = cwd
         self._argv = list(argv) if argv is not None else None
         self._peer = peer
-        self._proc: Optional[subprocess.Popen] = None
-        self._frames: "list[dict]" = []
+        self._proc: subprocess.Popen | None = None
+        self._frames: list[dict] = []
         self._frames_lock = threading.Lock()
         self._frames_ready = threading.Condition(self._frames_lock)
         self._stderr: list[str] = []
@@ -1152,7 +1153,7 @@ class StdioTransport:
         threading.Thread(target=self._read_stdout, daemon=True).start()
         threading.Thread(target=self._read_stderr, daemon=True).start()
 
-    def _launch_arguments(self) -> tuple[list[str], Optional[str], Optional[dict[str, str]]]:
+    def _launch_arguments(self) -> tuple[list[str], str | None, dict[str, str] | None]:
         """What to run, where to run it, and in which environment."""
         if self._argv is not None:
             # A caller that already knows its command line: Muse, whose
@@ -1249,7 +1250,7 @@ class StdioTransport:
             return False
         return True
 
-    def receive(self, timeout: float) -> Optional[dict]:
+    def receive(self, timeout: float) -> dict | None:
         # The wait applies after the stream has closed too. A caller that polls
         # for frames would otherwise spin at full speed on a dead pipe.
         with self._frames_ready:
@@ -1370,7 +1371,7 @@ class WebSocketTransport:
         token: str = "",
         credential: str = "token",
         username: str = "",
-        subprotocols: Optional[Sequence[str]] = None,
+        subprotocols: Sequence[str] | None = None,
     ) -> None:
         self._base_url = url
         # A gateway on this machine is attached to, not signed into: its
@@ -1389,10 +1390,10 @@ class WebSocketTransport:
         # assignment in `start()` on a machine where the package ships its own
         # types. Deliberately loose: naming `WebSocket` would fail wherever it
         # is untyped instead, which is the same problem the other way round.
-        self._ws: Optional[Any] = None
+        self._ws: Any | None = None
         self._error = ""
-        self._frames: "queue.Queue[dict]" = queue.Queue()
-        self._reader: Optional[threading.Thread] = None
+        self._frames: queue.Queue[dict] = queue.Queue()
+        self._reader: threading.Thread | None = None
         self._closing = threading.Event()
 
     def start(self) -> None:
@@ -1535,7 +1536,7 @@ class WebSocketTransport:
             return False
         return True
 
-    def receive(self, timeout: float) -> Optional[dict]:
+    def receive(self, timeout: float) -> dict | None:
         """The next frame the reader has, or ``None`` if none arrived in time.
 
         ``None`` is not a failure: the caller polls, and a turn spends most of
@@ -1691,7 +1692,7 @@ def _ready_or_fail(transport: Transport, deadline_seconds: float) -> str:
 
 
 def hermes_session_catalog(
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
     *,
     remote_url: str = "",
     remote_token: str = "",
@@ -1802,7 +1803,7 @@ def hermes_session_catalog(
 
 
 def hermes_model_options(
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
     *,
     remote_url: str = "",
     remote_token: str = "",

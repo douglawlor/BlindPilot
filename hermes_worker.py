@@ -18,7 +18,7 @@ import os
 import re
 import threading
 import time
-from typing import Callable, Optional, Sequence
+from collections.abc import Callable, Sequence
 
 from agent_backends import (
     SUBAGENT_COMPLETED,
@@ -286,7 +286,7 @@ def _clarify_questions(payload: dict) -> list[Question]:
     return [single] if single is not None else []
 
 
-def _clarify_question(entry: dict, qid: str) -> Optional[Question]:
+def _clarify_question(entry: dict, qid: str) -> Question | None:
     """One clarify entry as a question, or None when it carries no text."""
     asked = _first_text(entry.get("question"), entry.get("prompt"), entry.get("message"))
     if not asked:
@@ -471,14 +471,14 @@ class HeldConnection:
     """
 
     def __init__(self) -> None:
-        self._transport: Optional[Transport] = None
+        self._transport: Transport | None = None
         self._live_session = ""
         # The picker row the live session was last known to run, so the next
         # turn only asks for a switch when the pick has changed. Empty means
         # unknown, which the next turn treats as changed.
         self.model = ""
 
-    def take(self) -> tuple[Optional[Transport], str]:
+    def take(self) -> tuple[Transport | None, str]:
         """The connection to reuse and the live session id it was bound to.
 
         Returns ``(None, "")`` when there is nothing usable, which is the
@@ -492,7 +492,7 @@ class HeldConnection:
             return None, ""
         return transport, self._live_session
 
-    def keep(self, transport: Optional[Transport], live_session: str, model: str = "") -> None:
+    def keep(self, transport: Transport | None, live_session: str, model: str = "") -> None:
         self._transport = transport
         self._live_session = live_session
         self.model = model
@@ -516,7 +516,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
     def __init__(
         self,
         prompt: str,
-        session_id: Optional[str],
+        session_id: str | None,
         cwd: str,
         permission_mode: str,
         *,
@@ -527,8 +527,8 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         remote_token: str = "",
         remote_credential: str = "token",
         remote_username: str = "",
-        held: Optional[HeldConnection] = None,
-        attachments: Optional[Sequence[str]] = None,
+        held: HeldConnection | None = None,
+        attachments: Sequence[str] | None = None,
         resume_only: bool = False,
         session_title: str = "",
         on_session: Callable[[str], None],
@@ -539,9 +539,9 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         on_done: Callable[[], None],
         # Answers Hermes' clarify, sudo and secret requests, each of which
         # blocks the agent until a reply arrives.
-        on_question: Optional[AskQuestions] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
-        on_subagent: Optional[SubagentReport] = None,
+        on_question: AskQuestions | None = None,
+        on_permission: Callable[[str, dict, list], dict] | None = None,
+        on_subagent: SubagentReport | None = None,
     ) -> None:
         super().__init__(daemon=True)
         self._prompt = prompt
@@ -623,7 +623,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         # where each stands: interrupting the session does not reach them,
         # so Stop interrupts each one still running by name.
         self._subagents: dict[str, str] = {}
-        self._transport: Optional[Transport] = None
+        self._transport: Transport | None = None
         self._cancelled = False
         # Set when the turn's end arrives while a reply is still awaited, so
         # the caller waiting on that reply does not report a second ending.
@@ -764,7 +764,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
 
     # -- protocol plumbing -------------------------------------------------
 
-    def _send(self, method: str, params: dict) -> Optional[int]:
+    def _send(self, method: str, params: dict) -> int | None:
         """Send one request. Returns the id to await, or None when it could not go."""
         transport = self._transport
         if transport is None:
@@ -775,7 +775,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
     def _request(self, method: str, params: dict) -> bool:
         return self._send(method, params) is not None
 
-    def _await_frame(self, wanted: Callable[[dict], bool], timeout: float) -> Optional[dict]:
+    def _await_frame(self, wanted: Callable[[dict], bool], timeout: float) -> dict | None:
         """Wait for a frame ``wanted`` accepts, handling the events around it.
 
         Timed against the clock rather than by counting empty reads, so a peer
@@ -804,12 +804,12 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
                 return None
         return None
 
-    def _await_response(self, request_id: int, timeout: float) -> Optional[dict]:
+    def _await_response(self, request_id: int, timeout: float) -> dict | None:
         return self._await_frame(lambda frame: frame.get("id") == request_id, timeout)
 
     def _call(
         self, method: str, params: dict, timeout: float, no_reply: str, refused: str
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Send one request and wait for its result.
 
         Returns the reply's ``result`` (a dict, possibly empty), or None after
@@ -1173,7 +1173,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         self._on_started()
         self._consume_turn()
 
-    def _as_slash_command(self) -> Optional[str]:
+    def _as_slash_command(self) -> str | None:
         """The prompt, if Hermes would recognise it as one of its commands.
 
         Hermes is ASKED rather than matched against a list held here. It has
@@ -1242,7 +1242,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         self._clean_end = True
         self._on_complete(output or f"{name} finished with no output.")
 
-    def _upload_attachments(self) -> Optional[list[tuple[str, str]]]:
+    def _upload_attachments(self) -> list[tuple[str, str]] | None:
         """Send each attached file's bytes to Hermes, before the prompt goes out.
 
         Returns pairs of (name as the user knows it, path Hermes stored it at),
@@ -1458,7 +1458,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
             return str(params.get("type") or "")
         return ""
 
-    def _handle_event(self, frame: dict) -> Optional[bool]:
+    def _handle_event(self, frame: dict) -> bool | None:
         """Turn one frame into rows. ``True`` means the turn is over.
 
         Anything unrecognised is ignored on purpose: Hermes gains events over
@@ -1624,9 +1624,9 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
     def _reply(
         self,
         request_id: object,
-        result: Optional[dict] = None,
+        result: dict | None = None,
         *,
-        error: Optional[dict] = None,
+        error: dict | None = None,
     ) -> None:
         transport = self._transport
         if transport is None or request_id is None:
@@ -1743,7 +1743,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         self,
         request_id: str,
         questions: Sequence[Question],
-        answers: Optional[list[list[str]]],
+        answers: list[list[str]] | None,
     ) -> None:
         """One ``clarify.respond`` per question -- answered or not.
 
@@ -1867,7 +1867,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         else:
             self._request("approval.respond", {"request_id": request_id, "choice": choice})
 
-    def _turn_complete(self, payload: dict) -> Optional[bool]:
+    def _turn_complete(self, payload: dict) -> bool | None:
         if self._ended or self._clean_end:
             # The ending was already reported; this is a second completion
             # frame and must not announce the answer, or a failure, twice.

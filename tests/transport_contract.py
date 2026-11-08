@@ -57,7 +57,8 @@ such — that is not an exemption, it is the distinction being respected.
 from __future__ import annotations
 
 import time
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 # How long a finite stream gets to admit it has ended, and how patiently each
 # read waits.

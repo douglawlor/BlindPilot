@@ -20,7 +20,7 @@ import os
 import platform
 import subprocess
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import wx
 
@@ -70,8 +70,8 @@ class ReadView(wx.Dialog):
         text: str,
         title: str,
         monospace: bool = False,
-        edit_path: Optional[str] = None,
-        on_save: Optional[Callable[[str], None]] = None,
+        edit_path: str | None = None,
+        on_save: Callable[[str], None] | None = None,
         start_editing: bool = False,
     ):
         super().__init__(

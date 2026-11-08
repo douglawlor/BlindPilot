@@ -41,7 +41,8 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Callable, NamedTuple, Optional, Protocol, Sequence, cast
+from typing import IO, NamedTuple, Protocol, cast
+from collections.abc import Callable, Sequence
 
 import backend_pool
 import certificates
@@ -469,7 +470,7 @@ _COMPACTION_REQUESTS: dict[str, tuple[str, dict]] = {
 }
 
 
-def compaction_request(backend: object) -> Optional[tuple[str, dict]]:
+def compaction_request(backend: object) -> tuple[str, dict] | None:
     """(message text, extra worker arguments) to compact, or None if it can't."""
     return _COMPACTION_REQUESTS.get(normalize_backend(backend))
 
@@ -553,7 +554,7 @@ def _fallback_cli_paths(name: str) -> tuple[Path, ...]:
     )
 
 
-def find_backend_cli(backend: str) -> Optional[str]:
+def find_backend_cli(backend: str) -> str | None:
     """Find a provider CLI even in the restricted PATH inherited by a GUI."""
     info = BACKENDS[normalize_backend(backend)]
     if info.id == BACKEND_HERMES:
@@ -700,7 +701,7 @@ def backend_auth_ok(backend: str, timeout: int = 12) -> bool:
     return False
 
 
-def _freebuff_account() -> Optional[dict]:
+def _freebuff_account() -> dict | None:
     """The account FreeBuff stored at sign-in, or None if there is none to read."""
     credential = Path.home() / ".config" / "manicode" / "credentials.json"
     try:
@@ -743,7 +744,7 @@ def _freebuff_keychain_token(credential: Path) -> str:
     return ""
 
 
-def _freebuff_signed_in(account: Optional[dict]) -> bool:
+def _freebuff_signed_in(account: dict | None) -> bool:
     fields = (
         ("authToken", "email")
         if account and account.get("email")
@@ -779,7 +780,7 @@ def _opencode_providers() -> list[str]:
     return providers
 
 
-def _probe_backend(binary: str, args: list[str], timeout: int) -> tuple[Optional[int], str]:
+def _probe_backend(binary: str, args: list[str], timeout: int) -> tuple[int | None, str]:
     """Run a short provider command. Returns (exit code, what it printed).
 
     The exit code is ``None`` when the command could not be run at all, which
@@ -809,7 +810,7 @@ def _probe_backend(binary: str, args: list[str], timeout: int) -> tuple[Optional
     return proc.returncode, f"{stdout}\n{stderr}" if stdout and stderr else stdout or stderr
 
 
-def _claude_account_lines(code: Optional[int], text: str) -> list[str]:
+def _claude_account_lines(code: int | None, text: str) -> list[str]:
     """Read `claude auth status`, which answers in JSON."""
     if code is None:
         return ["Signed in: could not ask Claude Code"]
@@ -837,7 +838,7 @@ def _claude_account_lines(code: Optional[int], text: str) -> list[str]:
     return lines
 
 
-def _codex_account_lines(code: Optional[int], text: str) -> list[str]:
+def _codex_account_lines(code: int | None, text: str) -> list[str]:
     """Read `codex login status`, which answers in one sentence."""
     if code is None:
         return ["Signed in: could not ask Codex"]
@@ -926,21 +927,21 @@ class UsageWindow:
     """
 
     label: str
-    percent: Optional[float] = None
-    resets_at: Optional[float] = None
-    minutes: Optional[float] = None
+    percent: float | None = None
+    resets_at: float | None = None
+    minutes: float | None = None
     scoped: bool = False
     detail: str = ""
 
 
-def _as_number(value: object) -> Optional[float]:
+def _as_number(value: object) -> float | None:
     """A number the backend really sent, or None. Booleans are not numbers."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
 
 
-def _epoch_from_iso(value: object) -> Optional[float]:
+def _epoch_from_iso(value: object) -> float | None:
     """Claude Code times a window's end as an ISO 8601 string; Codex uses epoch."""
     if not isinstance(value, str) or not value.strip():
         return None
@@ -986,7 +987,7 @@ def _until_words(seconds: float) -> str:
     return f"in {days} day{'' if days == 1 else 's'}"
 
 
-def _reset_words(epoch: Optional[float]) -> str:
+def _reset_words(epoch: float | None) -> str:
     """When the window empties, said in local time and as a wait."""
     if epoch is None:
         return ""
@@ -1083,7 +1084,7 @@ def claude_limit_warning(info: object) -> str:
     return f"Claude Code {line}."
 
 
-def _claude_usage_windows(payload: Optional[dict]) -> list[UsageWindow]:
+def _claude_usage_windows(payload: dict | None) -> list[UsageWindow]:
     """Read the `get_usage` answer. Anything not reported is left out."""
     if not isinstance(payload, dict):
         return []
@@ -1129,7 +1130,7 @@ def _claude_usage_windows(payload: Optional[dict]) -> list[UsageWindow]:
     return windows
 
 
-def _claude_usage_reply(stdout: "IO[str]", request_id: str) -> Optional[dict]:
+def _claude_usage_reply(stdout: IO[str], request_id: str) -> dict | None:
     """Read the stream until this control request is answered, or it ends."""
     for raw in stdout:
         try:
@@ -1149,12 +1150,12 @@ def _claude_usage_reply(stdout: "IO[str]", request_id: str) -> Optional[dict]:
     return None
 
 
-def _claude_usage_exchange(proc: "subprocess.Popen[str]") -> Optional[dict]:
+def _claude_usage_exchange(proc: subprocess.Popen[str]) -> dict | None:
     """Ask a running process for its usage, retrying while the fetch lands."""
     stdin, stdout = proc.stdin, proc.stdout
     if stdin is None or stdout is None:
         return None
-    payload: Optional[dict] = None
+    payload: dict | None = None
     for attempt in range(_CLAUDE_USAGE_ATTEMPTS):
         request_id = uuid.uuid4().hex
         try:
@@ -1182,7 +1183,7 @@ def _claude_usage_exchange(proc: "subprocess.Popen[str]") -> Optional[dict]:
     return payload
 
 
-def _claude_usage_payload(binary: str, timeout: int) -> Optional[dict]:
+def _claude_usage_payload(binary: str, timeout: int) -> dict | None:
     """Ask a short-lived Claude Code process what the plan windows look like.
 
     A process of its own rather than the tab's: the pooled one belongs to a
@@ -1253,7 +1254,7 @@ def _claude_usage_payload(binary: str, timeout: int) -> Optional[dict]:
 _CODEX_WINDOW_FIELDS = ("primary", "secondary")
 
 
-def _codex_window_name(minutes: Optional[float], field: str = "") -> str:
+def _codex_window_name(minutes: float | None, field: str = "") -> str:
     """What to call a window of this length.
 
     Codex names its windows only by how long they are, and which of primary
@@ -1348,7 +1349,7 @@ def _codex_usage_windows(result: object) -> list[UsageWindow]:
     return windows
 
 
-def _codex_usage_handshake(server: "CodexServer") -> bool:
+def _codex_usage_handshake(server: CodexServer) -> bool:
     """Introduce BlindPilot to a server started for this question alone."""
     sent = server.send(
         {
@@ -1366,7 +1367,7 @@ def _codex_usage_handshake(server: "CodexServer") -> bool:
     return sent and server.send({"method": "initialized", "params": {}})
 
 
-def _codex_rate_limits(server: "CodexServer", timeout: int) -> object:
+def _codex_rate_limits(server: CodexServer, timeout: int) -> object:
     """Ask one app-server for the account's windows and wait for the reply."""
     inbox: queue.Queue[object] = queue.Queue()
     request_id = server.next_id()
@@ -1410,7 +1411,7 @@ def _codex_usage_result(binary: str, timeout: int) -> object:
     account = codex_plan_account()
     key = codex_pool_key(account)
     shared = backend_pool.pool()
-    server: Optional[CodexServer] = None
+    server: CodexServer | None = None
     with _CODEX_START_LOCK:
         held = shared.take(key)
         if held is not None:
@@ -1450,7 +1451,7 @@ def _freebuff_app_url() -> str:
     )
 
 
-def _freebuff_usage_payload(timeout: int) -> Optional[dict]:
+def _freebuff_usage_payload(timeout: int) -> dict | None:
     """Ask FreeBuff's account endpoint what this balance looks like.
 
     Signed out there is nothing to ask with, and asking anyway would be a
@@ -1491,7 +1492,7 @@ def _credit_words(amount: float) -> str:
     return f"{count:,} credit{'' if count == 1 else 's'}"
 
 
-def _freebuff_usage_windows(payload: Optional[dict]) -> list[UsageWindow]:
+def _freebuff_usage_windows(payload: dict | None) -> list[UsageWindow]:
     """Read the balance. What is left is the figure; the fraction is derived.
 
     The endpoint reports what has been spent this cycle and what is left, and
@@ -1545,7 +1546,7 @@ def _hermes_limit_words(credential: dict) -> str:
     return f"unavailable ({reason})" if reason else "unavailable"
 
 
-def _hermes_usage_windows(payload: Optional[dict]) -> list[UsageWindow]:
+def _hermes_usage_windows(payload: dict | None) -> list[UsageWindow]:
     """Read Hermes' credential pool for the ones it has stopped spending.
 
     Hermes runs on a pool rather than on one account, and a pool has no single
@@ -1585,7 +1586,7 @@ def _hermes_usage_windows(payload: Optional[dict]) -> list[UsageWindow]:
     return windows
 
 
-def _hermes_pool_payload() -> Optional[dict]:
+def _hermes_pool_payload() -> dict | None:
     """The pool file Hermes keeps its credential outcomes in.
 
     Read off disk rather than asked of the CLI: `hermes auth list` prints this
@@ -1773,7 +1774,7 @@ def backend_status(backend: str, timeout: int = 20) -> str:
 # it prints anything a person could act on. Asking the login shell what PATH it
 # would have given is the only way to recover the directories the user actually
 # installed into. It costs a shell start-up, so it is asked once.
-_login_shell_path: Optional[list[str]] = None
+_login_shell_path: list[str] | None = None
 _LOGIN_SHELL_PATH_LOCK = threading.Lock()
 
 
@@ -1849,7 +1850,7 @@ def _hermes_home() -> Path:
     return hermes_home()
 
 
-def settings_files(cwd: Optional[str] = None) -> list[SettingsFile]:
+def settings_files(cwd: str | None = None) -> list[SettingsFile]:
     """Every settings file BlindPilot knows how to point somebody at.
 
     Listing them creates nothing. These belong to the CLIs, which write their
@@ -2068,7 +2069,7 @@ def _codex_app_server_binary(binary: str) -> str:
     return str(candidates[0]) if candidates else binary
 
 
-def _codex_model_payload(binary: str, cwd: Optional[str], extra: Sequence[str]) -> object:
+def _codex_model_payload(binary: str, cwd: str | None, extra: Sequence[str]) -> object:
     """Run one form of `codex debug models` and decode its JSON, or None.
 
     ``extra`` is what tells the two apart: empty is the refreshing form, and
@@ -2124,7 +2125,7 @@ def _codex_catalog(payload: object) -> tuple[list[str], list[str]]:
 
 
 def codex_model_options(
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
 ) -> tuple[list[str], list[str], str, str, str]:
     """Read Codex's live model catalog and configured defaults.
 
@@ -2335,7 +2336,7 @@ def _write_freebuff_catalog_cache(stamp: tuple[str, float, int], models: list[st
         pass
 
 
-def _freebuff_package_readme(binary: Optional[str]) -> Optional[Path]:
+def _freebuff_package_readme(binary: str | None) -> Path | None:
     if not binary:
         return None
     wrapper = Path(binary)
@@ -2354,8 +2355,8 @@ def _freebuff_package_readme(binary: Optional[str]) -> Optional[Path]:
 def _resolve_minified_string(
     source: str,
     expression: str,
-    direct: Optional[dict[str, str]] = None,
-    seen: Optional[set[str]] = None,
+    direct: dict[str, str] | None = None,
+    seen: set[str] | None = None,
 ) -> str:
     expression = expression.strip()
     if seen is None:
@@ -2403,7 +2404,7 @@ def _readme_offset(readme_text: str, display_name: str) -> int:
     return readme_text.find(undated) if undated != display_name else -1
 
 
-def _freebuff_models_from_install(binary: Optional[str]) -> list[str]:
+def _freebuff_models_from_install(binary: str | None) -> list[str]:
     """Read the current picker catalog from the installed FreeBuff release."""
     executable = (
         Path.home()
@@ -2794,7 +2795,7 @@ def _settings_file() -> Path:
     return blindpilot_config_dir() / "config.json"
 
 
-def codex_plan_account() -> Optional[PlanAccount]:
+def codex_plan_account() -> PlanAccount | None:
     """The Account the Codex backend is set to use, or None for its own login."""
     saved = preferences.load_config((_settings_file(),)).get(CODEX_PLAN_ACCOUNT)
     if not isinstance(saved, dict):
@@ -2810,7 +2811,7 @@ def codex_plan_account() -> Optional[PlanAccount]:
     return PlanAccount(account_id=account_id, name=str(saved.get("name") or ""))
 
 
-def save_codex_plan_account(account: Optional[PlanAccount]) -> bool:
+def save_codex_plan_account(account: PlanAccount | None) -> bool:
     """Remember which Account the Codex backend uses. False if it was not saved.
 
     Only this key changes: the same file holds the window's preferences, and
@@ -2825,7 +2826,7 @@ def save_codex_plan_account(account: Optional[PlanAccount]) -> bool:
     return preferences.update_config(_settings_file(), {CODEX_PLAN_ACCOUNT: value})
 
 
-def codex_pool_key(account: Optional[PlanAccount] = None) -> tuple:
+def codex_pool_key(account: PlanAccount | None = None) -> tuple:
     """The pool key for the Codex backend, on this Account if one is chosen.
 
     One place decides what an Account means to the pool, so the turn that takes
@@ -2908,7 +2909,7 @@ def drop_pending_codex_processes() -> None:
 # Account every new conversation is bound to -- is still the one being left.
 
 _PENDING_CHOICE_LOCK = threading.Lock()
-_pending_choice: Optional[PlanAccount] = None
+_pending_choice: PlanAccount | None = None
 _pending_choice_owed = False
 
 
@@ -2928,10 +2929,10 @@ class PendingSwitch(NamedTuple):
     """A switch waiting for a turn, if there is one, and the Account it names."""
 
     owed: bool = False
-    account: Optional[PlanAccount] = None
+    account: PlanAccount | None = None
 
 
-def switch_codex_plan_account(account: Optional[PlanAccount]) -> AccountSwitch:
+def switch_codex_plan_account(account: PlanAccount | None) -> AccountSwitch:
     """Choose the Account the Codex backend uses, now or once its turn finishes.
 
     Nothing is running: the choice is saved and the Account being left has its
@@ -3208,14 +3209,14 @@ class CodexServer:
         self._state_lock = threading.Lock()
         self._next_id = 10
         # request id -> the queue the waiting turn is reading
-        self._waiting: dict[int, "queue.Queue[object]"] = {}
+        self._waiting: dict[int, queue.Queue[object]] = {}
         # Of those, the requests whose reply names a thread to subscribe.
         self._thread_replies: set[int] = set()
         # threadId -> the queue that conversation's turn is reading. Only ever
         # holds conversations somebody is reading right now: a message for a
         # thread with no entry belongs to a turn that has ended, and creating
         # an entry for it would both leak and replay it into the next turn.
-        self._threads: dict[str, "queue.Queue[object]"] = {}
+        self._threads: dict[str, queue.Queue[object]] = {}
         # turnId -> the completion the reader reports, and its watchers.
         self._turns: dict[str, _TurnWatch] = {}
         # threadId -> the turns given up on it that may still be generating.
@@ -3224,13 +3225,13 @@ class CodexServer:
         self._abandoned: dict[str, set[str]] = {}
         # Bounded, because this list now belongs to a process that outlives
         # thousands of turns rather than dying with one of them.
-        self._stderr: "collections.deque[str]" = collections.deque(maxlen=_CODEX_STDERR_LINES)
+        self._stderr: collections.deque[str] = collections.deque(maxlen=_CODEX_STDERR_LINES)
         # How many lines have ever been written, which is what lets a turn
         # read only its own: the deque forgets, so a position in it is not a
         # position in the stream.
         self._stderr_written = 0
         self._readers: list[threading.Thread] = []
-        self._stderr_reader: Optional[threading.Thread] = None
+        self._stderr_reader: threading.Thread | None = None
         self._closed = False
         self._read_error = ""
         # How many turns are speaking through this process right now.
@@ -3284,7 +3285,7 @@ class CodexServer:
     # ----- routing -----
 
     def expect(
-        self, request_id: int, listener: "queue.Queue[object]", *, binds_thread: bool = False
+        self, request_id: int, listener: queue.Queue[object], *, binds_thread: bool = False
     ) -> None:
         """Send this request's reply to that queue. Register before sending.
 
@@ -3316,7 +3317,7 @@ class CodexServer:
                 self._waiting.pop(request_id, None)
                 self._thread_replies.discard(request_id)
 
-    def attach(self, thread_id: str, listener: "queue.Queue[object]") -> None:
+    def attach(self, thread_id: str, listener: queue.Queue[object]) -> None:
         """Read this conversation's notifications from that queue.
 
         Ordinarily `expect(..., binds_thread=True)` has already done this from
@@ -3332,7 +3333,7 @@ class CodexServer:
         if closed:
             listener.put_nowait(_CODEX_CLOSED)
 
-    def detach_listener(self, listener: "queue.Queue[object]") -> None:
+    def detach_listener(self, listener: queue.Queue[object]) -> None:
         """Stop reading every conversation bound to this queue.
 
         By identity rather than by id, because the id is exactly what a turn
@@ -3541,7 +3542,7 @@ class CodexServer:
             if watch is not None:
                 watch.done.set()
         thread_id = str(params.get("threadId") or "")
-        listener: Optional["queue.Queue[object]"] = None
+        listener: queue.Queue[object] | None = None
         with self._state_lock:
             if self._closed:
                 return
@@ -3696,9 +3697,7 @@ def _plan_token_or_report(account: PlanAccount) -> None:
     )
 
 
-def _start_codex_server(
-    binary: str = "", plan_account: Optional[PlanAccount] = None
-) -> CodexServer:
+def _start_codex_server(binary: str = "", plan_account: PlanAccount | None = None) -> CodexServer:
     """Launch the shared app-server. Raises OSError if it cannot be started.
 
     Given a ``plan_account``, the server runs on that ChatGPT-plan account: it is
@@ -3787,7 +3786,7 @@ class _TurnWorker(threading.Thread):
     def __init__(
         self,
         prompt: str,
-        session_id: Optional[str],
+        session_id: str | None,
         cwd: str,
         permission_mode: str,
         *,
@@ -3801,9 +3800,9 @@ class _TurnWorker(threading.Thread):
         on_complete: Callable[[str], None],
         on_failed: Callable[[str], None],
         on_done: Callable[[], None],
-        on_question: Optional[questions.AskQuestions] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
-        on_subagent: Optional[SubagentReport] = None,
+        on_question: questions.AskQuestions | None = None,
+        on_permission: Callable[[str, dict, list], dict] | None = None,
+        on_subagent: SubagentReport | None = None,
         plan_account: object = UNBOUND,
     ) -> None:
         super().__init__(daemon=True)
@@ -3936,13 +3935,13 @@ class CodexWorker(_TurnWorker):
 
     def _setup(self) -> None:
         # Borrowed from the pool, which starts and stops it; other tabs read it too.
-        self._server: Optional[CodexServer] = None
-        self._held: Optional[backend_pool.HeldProcess] = None
+        self._server: CodexServer | None = None
+        self._held: backend_pool.HeldProcess | None = None
         # The pool key this turn borrowed its process under, which carries the
         # Account it runs on. Remembered rather than recomputed, so a choice
         # changed while the turn is running cannot make the turn give up
         # somebody else's process.
-        self._pool_key: Optional[tuple] = None
+        self._pool_key: tuple | None = None
         # `_plan_account` -- the Account this turn runs on, or None for Codex's
         # own login -- is the base class's, given by the tab that owns the
         # conversation. What decides whether a refusal is a plan's, and so
@@ -3954,7 +3953,7 @@ class CodexWorker(_TurnWorker):
         # until `expect` or `attach` says what should arrive in it; one of
         # those has to be called before it is read, because they are also what
         # wakes a reader of a server already closed.
-        self._inbox: Optional["queue.Queue[object]"] = None
+        self._inbox: queue.Queue[object] | None = None
         self._expected: list[int] = []
         self._borrowed = False
         self._thread_id = self._session_id or ""
@@ -4200,7 +4199,7 @@ class CodexWorker(_TurnWorker):
             # it ran. That drop was waiting for exactly this.
             drop_pending_codex_processes()
 
-    def _borrow_server(self) -> Optional[backend_pool.HeldProcess]:
+    def _borrow_server(self) -> backend_pool.HeldProcess | None:
         """The app-server this turn will speak through, or None having failed.
 
         Taking and handing back happen under one lock so that two tabs sending
@@ -4223,7 +4222,7 @@ class CodexWorker(_TurnWorker):
         account = self._plan_account
         if account is UNBOUND:
             account = codex_plan_account()
-        account = cast(Optional[PlanAccount], account)
+        account = cast(PlanAccount | None, account)
         self._plan_account = account
         key = codex_pool_key(account)
         shared = backend_pool.pool()
@@ -4639,7 +4638,7 @@ class CodexWorker(_TurnWorker):
         self._watched = self._turn_id
         server.watch_turn(self._turn_id)
 
-    def _name_the_stopped_turn(self, inbox: "queue.Queue[object]", turn_request: int) -> None:
+    def _name_the_stopped_turn(self, inbox: queue.Queue[object], turn_request: int) -> None:
         """Before leaving, learn the id of a turn that was asked for unnamed.
 
         Stop can land in the gap between `turn/start` and the reply that names
@@ -4920,7 +4919,7 @@ class CodexWorker(_TurnWorker):
             self._children[child] = status
             self._on_subagent(child, "", status, f"Finished: {status}")
 
-    def _stop_children(self, server: "CodexServer") -> None:
+    def _stop_children(self, server: CodexServer) -> None:
         """Interrupt each agent still running; the parent's interrupt does not.
 
         Sent and not waited on: the verify that follows is for the
@@ -5158,7 +5157,7 @@ def _freebuff_chat_dirs(cwd: str) -> dict[str, float]:
     return found
 
 
-def _freebuff_chat_path(cwd: str, session_id: str) -> Optional[Path]:
+def _freebuff_chat_path(cwd: str, session_id: str) -> Path | None:
     """Locate one FreeBuff chat regardless of its Git-derived project bucket."""
     if not session_id:
         return None
@@ -5169,7 +5168,7 @@ def _freebuff_chat_path(cwd: str, session_id: str) -> Optional[Path]:
     return None
 
 
-def _freebuff_resume_chat_path(cwd: str, session_id: str) -> Optional[Path]:
+def _freebuff_resume_chat_path(cwd: str, session_id: str) -> Path | None:
     """The CLI only resumes IDs in this project's bucket; otherwise it falls back."""
     chat = _freebuff_chat_path(cwd, session_id)
     project = Path(cwd).resolve().name
@@ -5267,7 +5266,7 @@ def _freebuff_question_box(visible: str) -> list[str]:
     return body
 
 
-def _freebuff_open_question(visible: str) -> tuple[int, int, Optional[questions.Question]]:
+def _freebuff_open_question(visible: str) -> tuple[int, int, questions.Question | None]:
     """(how many questions there are, which one is open, and that question).
 
     FreeBuff shows one question's answers at a time and keeps the rest folded
@@ -5477,7 +5476,7 @@ def _append_delta(spoken: str, current: str) -> str:
     return current
 
 
-def _freebuff_answer_message(payload: object) -> Optional[dict]:
+def _freebuff_answer_message(payload: object) -> dict | None:
     """Return the newest AI message that actually carries a reply.
 
     FreeBuff writes a ``mode-divider`` message ahead of every turn, and it also
@@ -5497,7 +5496,7 @@ def _freebuff_answer_message(payload: object) -> Optional[dict]:
     return None
 
 
-def _freebuff_answer_id(chat: Optional[Path]) -> str:
+def _freebuff_answer_id(chat: Path | None) -> str:
     """Identify the newest answer already in a chat, before a new turn starts."""
     if chat is None:
         return ""
@@ -5510,7 +5509,7 @@ def _freebuff_answer_id(chat: Optional[Path]) -> str:
 
 
 def _freebuff_chat_snapshot(
-    chat: Optional[Path],
+    chat: Path | None,
 ) -> tuple[str, str, str, list[tuple[str, str, str, tuple[str, ...]]]]:
     """Read the newest answer's id, reasoning, text, and agent states.
 
@@ -5590,7 +5589,7 @@ def _freebuff_agent_log(block: dict) -> tuple[str, ...]:
     return tuple(lines)
 
 
-def _freebuff_chat_stamp(chat: Optional[Path]) -> tuple:
+def _freebuff_chat_stamp(chat: Path | None) -> tuple:
     """A cheap fingerprint of a chat's files, to skip re-reading them.
 
     The loop looks at the chat many times a second so that the end of a turn is
@@ -5609,7 +5608,7 @@ def _freebuff_chat_stamp(chat: Optional[Path]) -> tuple:
     return tuple(marks)
 
 
-def _freebuff_run_status(chat: Optional[Path], offset: int = 0) -> str:
+def _freebuff_run_status(chat: Path | None, offset: int = 0) -> str:
     """Return complete/cancelled/disconnected from FreeBuff's per-chat log.
 
     "session over" alone is not a drop: 0.0.168 opens every new chat with
@@ -5712,7 +5711,7 @@ def _freebuff_log_boot_finished(tail: str) -> bool:
 def _freebuff_boot_ready(
     cwd: str,
     before: dict[str, float],
-    chat_path: Optional[Path],
+    chat_path: Path | None,
     log_offset: int,
     pid: int = 0,
 ) -> bool:
@@ -5751,7 +5750,7 @@ def _freebuff_boot_ready(
     return _freebuff_log_boot_finished(new_tail)
 
 
-def _freebuff_new_chat_path(before: dict[str, float], cwd: str, pid: int = 0) -> Optional[Path]:
+def _freebuff_new_chat_path(before: dict[str, float], cwd: str, pid: int = 0) -> Path | None:
     """Find this terminal's chat using the process id FreeBuff logs at boot."""
     after = _freebuff_chat_dirs(cwd)
     new_ids = set(after) - set(before)
@@ -5779,7 +5778,7 @@ def _freebuff_new_chat_path(before: dict[str, float], cwd: str, pid: int = 0) ->
     return None
 
 
-def _freebuff_new_chat_log(before: dict[str, float], cwd: str, pid: int = 0) -> Optional[str]:
+def _freebuff_new_chat_log(before: dict[str, float], cwd: str, pid: int = 0) -> str | None:
     """The whole log of the chat this launch created, or None if it made none."""
     target = _freebuff_new_chat_path(before, cwd, pid)
     if target is None:
@@ -5873,7 +5872,7 @@ class FreebuffTerminal(Protocol):
 
 
 def _drain_to_queue(
-    read_one: Callable[[], Optional[str]], stream_ended: threading.Event
+    read_one: Callable[[], str | None], stream_ended: threading.Event
 ) -> Callable[[float], str]:
     """Pump a terminal into a queue on a thread of its own, and hand back a reader.
 
@@ -6033,7 +6032,7 @@ class _ConPtyTerminal:
         self._output_read = output_read
         self._pseudo = handle()
         self._process = None
-        self._job: Optional[_WindowsJob] = None
+        self._job: _WindowsJob | None = None
         try:
             pseudo = handle()
             result = kernel32.CreatePseudoConsole(
@@ -6179,7 +6178,7 @@ class _ConPtyTerminal:
             kernel32.CloseHandle(info.hThread)
         return info.hProcess, int(info.dwProcessId)
 
-    def read_chunk(self) -> Optional[str]:
+    def read_chunk(self) -> str | None:
         """One read; None when nothing more will ever arrive.
 
         The output pipe stays open while the pseudoconsole does, even after
@@ -6191,8 +6190,8 @@ class _ConPtyTerminal:
         """
         ctypes = self._ctypes
         kernel32 = ctypes.windll.kernel32
-        empty_since: Optional[float] = None
-        idle_since: Optional[float] = None
+        empty_since: float | None = None
+        idle_since: float | None = None
         while True:
             if self._closed:
                 return None
@@ -6315,7 +6314,7 @@ def _spawn_freebuff_pty(
             # Tearing the terminal down raises one last console, after the
             # output has stopped, so this outlives the stream it guards.
             started = time.monotonic()
-            grace_until: Optional[float] = None
+            grace_until: float | None = None
             while True:
                 now = time.monotonic()
                 if stream_ended.is_set():
@@ -6347,7 +6346,7 @@ def _spawn_freebuff_pty(
         if pty.pid:
             roots.add(int(pty.pid))
 
-        def read_one() -> Optional[str]:
+        def read_one() -> str | None:
             # ConPTY has no timeout of its own: the read blocks until either
             # bytes or the end of the terminal, and anything it raises is
             # the end of it.
@@ -6374,7 +6373,7 @@ def _spawn_freebuff_pty(
         timeout=0.25,
     )
 
-    def read_one_posix() -> Optional[str]:
+    def read_one_posix() -> str | None:
         # pexpect reads with a timeout of its own, so a quiet terminal is a
         # TIMEOUT rather than the end of one.
         try:
@@ -6395,7 +6394,7 @@ class _HiddenConsoleProcess:
     two are interchangeable from there.
     """
 
-    def __init__(self, proc: "subprocess.Popen[bytes]") -> None:
+    def __init__(self, proc: subprocess.Popen[bytes]) -> None:
         self._proc = proc
 
     def isalive(self) -> bool:
@@ -6486,7 +6485,7 @@ def spawn_hidden_terminal(args: list[str], cwd: str) -> object:
 # started ahead of time, for the conversation the next message will most likely
 # continue, and handed to the run that claims it.
 _FREEBUFF_PREWARM_LOCK = threading.Lock()
-_freebuff_prewarm: Optional[dict] = None
+_freebuff_prewarm: dict | None = None
 _freebuff_prewarm_generation = 0
 # How long an unclaimed terminal is kept before a timer closes it. Long enough
 # to cover thinking time between messages, short enough that a terminal started
@@ -6530,7 +6529,7 @@ def discard_freebuff_prewarm() -> None:
         _end_prewarm(holding)
 
 
-def prewarm_freebuff(cwd: str, session_id: Optional[str], model: str, delay: float = 0.0) -> None:
+def prewarm_freebuff(cwd: str, session_id: str | None, model: str, delay: float = 0.0) -> None:
     """Start the terminal the next FreeBuff message will use.
 
     Doing nothing here is always safe: a message that finds no terminal waiting,
@@ -6632,7 +6631,7 @@ def prewarm_freebuff(cwd: str, session_id: Optional[str], model: str, delay: flo
     threading.Thread(target=work, daemon=True).start()
 
 
-def _take_freebuff_prewarm(cwd: str, session_id: Optional[str], model: str) -> Optional[dict]:
+def _take_freebuff_prewarm(cwd: str, session_id: str | None, model: str) -> dict | None:
     """Claim the waiting terminal, if it is the one this message needs."""
     key = (os.path.abspath(cwd), session_id or "", model)
     global _freebuff_prewarm, _freebuff_prewarm_generation
@@ -6690,7 +6689,7 @@ class FreebuffWorker(_TurnWorker):
         # diagnostics record says was in force instead.
         self._permission_mode = "n/a"
         self._write_lock = threading.Lock()
-        self._pty: Optional[FreebuffTerminal] = None
+        self._pty: FreebuffTerminal | None = None
         # Set once the terminal can produce no further output.
         self._stream_ended = threading.Event()
         # Everything typed into FreeBuff's composer this turn, as its echo is
@@ -6830,7 +6829,7 @@ class FreebuffWorker(_TurnWorker):
         stream = pyte.Stream(screen)
         sent = False
         started = False
-        ready_since: Optional[float] = None
+        ready_since: float | None = None
         last_visible = ""
         # What has been read out already, in the shape the screen paints it, so
         # the next frame can be compared against it.
@@ -6848,8 +6847,8 @@ class FreebuffWorker(_TurnWorker):
         # A mid-turn drop is awaited, not failed on sight — the patience
         # constant below. And a boot that has not reconnected holds the
         # message rather than feeding it to a composer that would lose it.
-        disconnected_since: Optional[float] = None
-        boot_hold_started: Optional[float] = None
+        disconnected_since: float | None = None
+        boot_hold_started: float | None = None
         agent_states: dict[str, str] = {}
         # How much of each agent's log has been handed to the window.
         agent_logged: dict[str, int] = {}
@@ -6861,9 +6860,9 @@ class FreebuffWorker(_TurnWorker):
         saw_busy = False
         session_reported = bool(self._session_id)
         next_session_check = time.monotonic()
-        turn_started_at: Optional[float] = None
+        turn_started_at: float | None = None
         next_heartbeat = float("inf")
-        completion_seen_at: Optional[float] = None
+        completion_seen_at: float | None = None
         deadline = time.monotonic() + _FREEBUFF_TURN_SECONDS
 
         def refresh(wait: float) -> str:
@@ -6888,7 +6887,7 @@ class FreebuffWorker(_TurnWorker):
                 screen_dirty = True
             return current
 
-        def restart() -> Optional[Callable[[float], str]]:
+        def restart() -> Callable[[float], str] | None:
             """Replace a terminal that was waiting and is no longer usable.
 
             One started ahead of time can have been sitting for a quarter of an
@@ -7274,7 +7273,7 @@ class FreebuffWorker(_TurnWorker):
         if session:
             prewarm_freebuff(self._cwd, session, self._model, delay=1.0)
 
-    def _adopt_new_chat(self, before: dict[str, float]) -> Optional[str]:
+    def _adopt_new_chat(self, before: dict[str, float]) -> str | None:
         """The id of a chat this launch created, or None if this turn has one.
 
         FreeBuff creates a new conversation's folder when its terminal starts.
@@ -7351,7 +7350,7 @@ class FreebuffWorker(_TurnWorker):
         refresh(0.5)
         return True
 
-    def _ask_one(self, question: questions.Question) -> Optional[list[str]]:
+    def _ask_one(self, question: questions.Question) -> list[str] | None:
         """Put one question to the person. None if they closed the dialog."""
         if self._on_question is None:
             return None
@@ -7611,7 +7610,7 @@ class FreebuffWorker(_TurnWorker):
 # machine can drive it.
 
 _OPENCODE_SERVER_LOCK = threading.Lock()
-_opencode_server: Optional["OpencodeServer"] = None
+_opencode_server: OpencodeServer | None = None
 _OPENCODE_CATALOG_LOCK = threading.Lock()
 # One catalog per working directory: a project can pin its own model list.
 _opencode_catalog_cache: dict[str, dict] = {}
@@ -7720,11 +7719,9 @@ class OpencodeServer:
         password = secrets.token_urlsafe(24)
         env = subprocess_env(binary)
         env["OPENCODE_SERVER_PASSWORD"] = password
-        self._log: "deque[str]" = deque(maxlen=50)
+        self._log: deque[str] = deque(maxlen=50)
         self._url = ""
-        self._auth = "Basic " + base64.b64encode(f"opencode:{password}".encode("utf-8")).decode(
-            "ascii"
-        )
+        self._auth = "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode("ascii")
         # The probe in _free_port closes before this child can bind, so
         # another process may take the port in between; a second attempt on a
         # fresh port turns that race into a slower start instead of a failed
@@ -7788,9 +7785,9 @@ class OpencodeServer:
         self,
         method: str,
         path: str,
-        params: Optional[dict] = None,
+        params: dict | None = None,
         body: object = None,
-        timeout: Optional[float] = 120,
+        timeout: float | None = 120,
     ):
         """The raw response, for callers that want to read it as it arrives."""
         import urllib.parse
@@ -7811,9 +7808,9 @@ class OpencodeServer:
         self,
         method: str,
         path: str,
-        params: Optional[dict] = None,
+        params: dict | None = None,
         body: object = None,
-        timeout: Optional[float] = 120,
+        timeout: float | None = 120,
     ) -> object:
         with self.open(method, path, params, body, timeout) as response:
             raw = response.read().decode("utf-8", "replace")
@@ -7867,7 +7864,7 @@ def stop_opencode_server() -> None:
 atexit.register(stop_opencode_server)
 
 
-def _opencode_catalog(cwd: Optional[str] = None, refresh: bool = False) -> dict:
+def _opencode_catalog(cwd: str | None = None, refresh: bool = False) -> dict:
     """opencode's providers, their models, and the defaults it would pick.
 
     Asked per directory, because a project's own ``opencode.json`` can pin a
@@ -7917,7 +7914,7 @@ def _opencode_command_list(payload: object) -> list[tuple[str, str]]:
     return commands
 
 
-def opencode_commands(cwd: Optional[str] = None) -> list[tuple[str, str]]:
+def opencode_commands(cwd: str | None = None) -> list[tuple[str, str]]:
     """The commands read for this directory, or none if it has not been read.
 
     Deliberately never asks the server: the slash picker opens on a key press,
@@ -7957,7 +7954,7 @@ def _opencode_models_from_cli() -> list[str]:
 
 
 def opencode_model_options(
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
 ) -> tuple[list[str], list[str], str, str, str]:
     """Every model opencode can reach, the effort levels they offer, and the
     model it would use if BlindPilot named none."""
@@ -7999,7 +7996,7 @@ def opencode_model_options(
     return models, efforts, opencode_default_model(catalog=catalog), "", ""
 
 
-def opencode_default_model(cwd: Optional[str] = None, catalog: Optional[dict] = None) -> str:
+def opencode_default_model(cwd: str | None = None, catalog: dict | None = None) -> str:
     """The ``provider/model`` opencode itself would run, or "" if it has none."""
     try:
         catalog = catalog if catalog is not None else _opencode_catalog(cwd)
@@ -8025,7 +8022,7 @@ def opencode_split_model(model: str) -> tuple[str, str]:
     return (provider.strip(), name.strip()) if name.strip() else ("", "")
 
 
-def opencode_model_efforts(model: str, cwd: Optional[str] = None) -> list[str]:
+def opencode_model_efforts(model: str, cwd: str | None = None) -> list[str]:
     """The effort levels this one model offers, so an unusable one is dropped.
 
     opencode rejects a variant a model does not define, and the picker offers
@@ -8092,9 +8089,7 @@ def opencode_auth_methods(provider_id: str) -> list[dict]:
     return [{"type": "api", "label": "Manually enter API key"}]
 
 
-def _opencode_write(
-    method: str, path: str, body: Optional[dict], timeout: int, failure: str
-) -> str:
+def _opencode_write(method: str, path: str, body: dict | None, timeout: int, failure: str) -> str:
     """Change what opencode has stored. Returns "" on success, else the error.
 
     Every one of these writes leaves the cached provider list stale, so the
@@ -8110,7 +8105,7 @@ def _opencode_write(
     return ""
 
 
-def opencode_connect_api_key(provider_id: str, key: str, metadata: Optional[dict] = None) -> str:
+def opencode_connect_api_key(provider_id: str, key: str, metadata: dict | None = None) -> str:
     """Store an API key for a provider. Returns "" on success, else the error."""
     body: dict = {"type": "api", "key": key}
     if metadata:
@@ -8128,7 +8123,7 @@ def opencode_disconnect(provider_id: str) -> str:
 
 
 def opencode_oauth_start(
-    provider_id: str, method: int, inputs: Optional[dict] = None
+    provider_id: str, method: int, inputs: dict | None = None
 ) -> tuple[dict, str]:
     """Begin a browser sign-in. Returns (authorization, error).
 
@@ -8242,7 +8237,7 @@ _OPENCODE_IMAGE_MAGIC: tuple[tuple[bytes, str], ...] = (
 _OPENCODE_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
 
-def _opencode_file_part(path: str) -> Optional[dict]:
+def _opencode_file_part(path: str) -> dict | None:
     """One attached file as a prompt file part, or None to name it in text.
 
     Pictures travel as data: URLs with their media type (measured: a 1x1 PNG
@@ -8297,7 +8292,7 @@ class OpencodeWorker(_TurnWorker):
 
     def _setup(self) -> None:
         self._session_id = self._session_id or ""
-        self._server: Optional[OpencodeServer] = None
+        self._server: OpencodeServer | None = None
         self._stream: object = None
         # Resolved once the turn starts. Working out whether a model offers the
         # chosen effort can mean reading opencode's catalog, and a message can
@@ -8682,7 +8677,7 @@ class OpencodeWorker(_TurnWorker):
             raise OSError("opencode did not return a conversation id")
         self._session_id = str(session_id)
 
-    def _as_command(self) -> Optional[tuple[str, str]]:
+    def _as_command(self) -> tuple[str, str] | None:
         """(command, arguments) if the prompt names one of opencode's commands.
 
         opencode's commands are prompt templates its server expands — the text
@@ -9006,7 +9001,7 @@ class OpencodeWorker(_TurnWorker):
             message = str(state.get("error") or "").strip()
             self._on_activity("result", message or f"{name} failed")
 
-    def _post(self, routes: list[tuple[str, Optional[dict]]], what: str) -> bool:
+    def _post(self, routes: list[tuple[str, dict | None]], what: str) -> bool:
         """POST to the first of these routes opencode accepts.
 
         A permission request and a question both hold the turn open until they
@@ -9122,7 +9117,7 @@ class AgentWorker(Protocol):
 
     def steer(self, text: str) -> bool: ...
 
-    def join(self, timeout: Optional[float] = None) -> None: ...
+    def join(self, timeout: float | None = None) -> None: ...
 
     def cancel(self) -> None: ...
 

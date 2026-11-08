@@ -15,7 +15,7 @@ import time
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Protocol
 
 import agent_backends
 import process_utils
@@ -31,13 +31,13 @@ class BackendUpdateState(str, Enum):
 @dataclass(frozen=True)
 class BackendUpdateResult:
     backend_id: str
-    executable_path: Optional[str]
-    installed_version: Optional[str]
-    available_version: Optional[str]
+    executable_path: str | None
+    installed_version: str | None
+    available_version: str | None
     state: BackendUpdateState
     source: str
     checked_at: float
-    failure_reason: Optional[str] = None
+    failure_reason: str | None = None
 
 
 _VERSION_RE = re.compile(
@@ -53,7 +53,7 @@ _NPM_PACKAGES = {
 }
 
 
-def parse_version(text: str) -> Optional[tuple[int, int, int, tuple[str, ...]]]:
+def parse_version(text: str) -> tuple[int, int, int, tuple[str, ...]] | None:
     match = _VERSION_RE.search(text or "")
     if not match:
         return None
@@ -76,9 +76,9 @@ class BackendAdapter(Protocol):
     source: str
     manual_update_supported: bool
 
-    def package_name(self, backend: str) -> Optional[str]: ...
+    def package_name(self, backend: str) -> str | None: ...
 
-    def latest_version(self, backend: str) -> Optional[str]: ...
+    def latest_version(self, backend: str) -> str | None: ...
 
 
 def _run_version_probe(binary: str) -> str:
@@ -101,7 +101,7 @@ def _run_version_probe(binary: str) -> str:
     return ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
 
 
-def _run_npm_metadata(npm: str, package: str) -> Optional[str]:
+def _run_npm_metadata(npm: str, package: str) -> str | None:
     try:
         result = subprocess.run(
             [npm, "view", package, "version", "--json"],
@@ -130,10 +130,10 @@ class _NpmAdapter:
     source = "npm"
     manual_update_supported = True
 
-    def package_name(self, backend: str) -> Optional[str]:
+    def package_name(self, backend: str) -> str | None:
         return _NPM_PACKAGES.get(agent_backends.normalize_backend(backend))
 
-    def latest_version(self, backend: str) -> Optional[str]:
+    def latest_version(self, backend: str) -> str | None:
         package = self.package_name(backend)
         npm = _find_npm()
         return _run_npm_metadata(npm, package) if package and npm else None
@@ -143,14 +143,14 @@ class _InstalledOnlyAdapter:
     source = "official_installer"
     manual_update_supported = True
 
-    def package_name(self, _backend: str) -> Optional[str]:
+    def package_name(self, _backend: str) -> str | None:
         return None
 
-    def latest_version(self, _backend: str) -> Optional[str]:
+    def latest_version(self, _backend: str) -> str | None:
         return None
 
 
-def _find_npm() -> Optional[str]:
+def _find_npm() -> str | None:
     for name in ("npm.cmd", "npm"):
         path = agent_backends.shutil.which(name)
         if path:
@@ -159,7 +159,7 @@ def _find_npm() -> Optional[str]:
 
 
 class BackendUpdateService:
-    def __init__(self, cache_path: Optional[Path] = None, ttl: float = 300.0) -> None:
+    def __init__(self, cache_path: Path | None = None, ttl: float = 300.0) -> None:
         self.cache_path = cache_path
         self.ttl = ttl
         self._cache: dict[str, BackendUpdateResult] = {}
@@ -269,9 +269,9 @@ class BackendUpdateService:
     def _failed(
         backend: str,
         reason: str,
-        checked_at: Optional[float] = None,
-        binary: Optional[str] = None,
-        installed: Optional[str] = None,
+        checked_at: float | None = None,
+        binary: str | None = None,
+        installed: str | None = None,
     ) -> BackendUpdateResult:
         return BackendUpdateResult(
             backend,

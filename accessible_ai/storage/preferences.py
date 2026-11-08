@@ -22,7 +22,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 
 # One lock around every write, because one file has two writers. Both halves of
@@ -41,7 +41,7 @@ def load_config(paths: Iterable[Path]) -> dict:
     """
     for path in paths:
         try:
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
                 return data if isinstance(data, dict) else {}
         except (OSError, ValueError):

@@ -28,7 +28,8 @@ import time
 import weakref
 from collections import deque
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, cast
+from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable, Sequence
 
 import wx
 
@@ -319,7 +320,7 @@ _SLASH_COMMANDS_REFRESH = "Refresh the command list (checks the backend)"
 _slash_commands_cache: dict[tuple[str, str], list[tuple[str, str]]] = {}
 
 
-def _slash_commands_cache_key(backend: str, cwd: Optional[str]) -> tuple[str, str]:
+def _slash_commands_cache_key(backend: str, cwd: str | None) -> tuple[str, str]:
     """The same backend and folder spelled differently still share their warm list."""
     folder = os.path.normcase(os.path.abspath(cwd)) if cwd else ""
     return normalize_backend(backend), folder
@@ -575,7 +576,7 @@ def _gui_work(name: str, action: Callable[..., object]) -> Callable[..., None]:
     return run
 
 
-def _notify_if_away(panel: "SessionPanel", message: str) -> None:
+def _notify_if_away(panel: SessionPanel, message: str) -> None:
     """A system notification, only while another application has focus.
 
     A turn that ends while you are in your editor or browser was announced
@@ -730,7 +731,7 @@ def _slash_command_labels(commands: list[tuple[str, str]]) -> list[str]:
     return [f"{cmd}. {desc}" for cmd, desc in commands] + [_SLASH_COMMANDS_REFRESH]
 
 
-def _slash_commands_for_backend(backend: str, cwd: Optional[str] = None) -> list[tuple[str, str]]:
+def _slash_commands_for_backend(backend: str, cwd: str | None = None) -> list[tuple[str, str]]:
     """The commands this backend offers, including the ones it is asked for."""
     commands = _static_slash_commands_for_backend(backend)
     backend = normalize_backend(backend)
@@ -802,7 +803,7 @@ def _tab_label(title: str, cwd: str) -> str:
     return _tab_title(title) or (_short_label(cwd) if cwd else "New session")
 
 
-def cached_changed_files(cwd: str) -> Optional[tuple[str, list[tuple[str, str, bool]]]]:
+def cached_changed_files(cwd: str) -> tuple[str, list[tuple[str, str, bool]]] | None:
     """A folder's warm changed-file listing, or None when nothing is warm.
 
     Only a listing with entries is kept: an empty answer and "not a repository"
@@ -812,12 +813,12 @@ def cached_changed_files(cwd: str) -> Optional[tuple[str, list[tuple[str, str, b
     return _changed_files_cache.get(_changed_files_cache_key(cwd))
 
 
-def cached_slash_commands(backend: str, cwd: Optional[str]) -> Optional[list[tuple[str, str]]]:
+def cached_slash_commands(backend: str, cwd: str | None) -> list[tuple[str, str]] | None:
     """The warm command list for this backend and folder, or None."""
     return _slash_commands_cache.get(_slash_commands_cache_key(backend, cwd))
 
 
-def changed_files(cwd: str) -> Optional[tuple[str, list[tuple[str, str, bool]]]]:
+def changed_files(cwd: str) -> tuple[str, list[tuple[str, str, bool]]] | None:
     """What differs from the last commit in `cwd`'s repository, or None.
 
     Returns the repository root and (path, spoken description, is new)
@@ -862,7 +863,7 @@ def forget_changed_files(cwd: str) -> None:
     _changed_files_cache.pop(_changed_files_cache_key(cwd), None)
 
 
-def forget_slash_commands(backend: str, cwd: Optional[str]) -> None:
+def forget_slash_commands(backend: str, cwd: str | None) -> None:
     """Drop a warm list, so Refresh asks the backend again."""
     _slash_commands_cache.pop(_slash_commands_cache_key(backend, cwd), None)
 
@@ -913,9 +914,7 @@ def readable_diff(diff: str) -> str:
     return "\n".join(out)
 
 
-def remember_changed_files(
-    cwd: str, found: Optional[tuple[str, list[tuple[str, str, bool]]]]
-) -> None:
+def remember_changed_files(cwd: str, found: tuple[str, list[tuple[str, str, bool]]] | None) -> None:
     """Keep a folder's listing warm, and forget an answer with nothing to list."""
     key = _changed_files_cache_key(cwd)
     if found is not None and found[1]:
@@ -924,9 +923,7 @@ def remember_changed_files(
         _changed_files_cache.pop(key, None)
 
 
-def remember_slash_commands(
-    backend: str, cwd: Optional[str], commands: list[tuple[str, str]]
-) -> None:
+def remember_slash_commands(backend: str, cwd: str | None, commands: list[tuple[str, str]]) -> None:
     """Keep a completed probe warm, so the next open does not ask again."""
     _slash_commands_cache[_slash_commands_cache_key(backend, cwd)] = list(commands)
 
@@ -963,9 +960,9 @@ class SessionPanel(wx.Panel):
         self,
         parent: wx.Window,
         cwd: str,
-        on_status: Callable[["SessionPanel", str], None],
-        on_title: Callable[["SessionPanel", str], None],
-        earcons: "Earcons",
+        on_status: Callable[[SessionPanel, str], None],
+        on_title: Callable[[SessionPanel, str], None],
+        earcons: Earcons,
         on_side_chat: Callable[[str, str], None],
         get_backend: Callable[[], str],
         focus_before: Callable[[], None],
@@ -997,7 +994,7 @@ class SessionPanel(wx.Panel):
         # which is what carries options for the dialog to offer.
         self._question_in_the_answer: str | Sequence[Question] = ""
 
-        self._turns: List[Turn] = []
+        self._turns: list[Turn] = []
         # The agent's own task list, as its task tools last left it.
         self.task_list = TaskList()
         # Each question and permission request this conversation put to the
@@ -1010,16 +1007,16 @@ class SessionPanel(wx.Panel):
         self.remote_url = ""
         # Told of each finished turn's answer (None for a stopped or failed
         # one) while this tab is in an agent conversation.
-        self.on_turn_answer: Optional[Callable[["SessionPanel", Optional[str]], None]] = None
-        self._rows: List[Row] = []  # every row across every response, in order
-        self._displayed: List[Row] = []  # rows currently shown (after search)
+        self.on_turn_answer: Callable[[SessionPanel, str | None], None] | None = None
+        self._rows: list[Row] = []  # every row across every response, in order
+        self._displayed: list[Row] = []  # rows currently shown (after search)
         # Start offset of each displayed row's line in the text view, kept in
         # step with _displayed so a caret position can be mapped to a row.
-        self._row_starts: List[int] = []
+        self._row_starts: list[int] = []
         self._search_term = ""
         self._response_count = 0
         # Response number of the turn currently streaming in (None between turns).
-        self._stream_response: Optional[int] = None
+        self._stream_response: int | None = None
         self._assistant_narrated_this_turn = False
         # A Hermes conversation being read back; its rows bypass the live gate.
         self._replaying = False
@@ -1029,14 +1026,14 @@ class SessionPanel(wx.Panel):
         # The message being streamed a sentence at a time: [response number,
         # speaker, its text so far, parse offset, rows added so far]. See
         # _stream_answer_rows.
-        self._live_answer: Optional[list] = None
+        self._live_answer: list | None = None
         # Set while the user's Stop is being carried out, so the backend's own
         # "cancelled" report is not announced to them as an error.
         self._stopping = False
         # The backend's own question, while it is on screen. Held so stopping
         # the run can close it: the worker thread is blocked on the answer, and
         # the thread that would stop it is the one the dialog is running on.
-        self._question_dialog: Optional["QuestionDialog"] = None
+        self._question_dialog: QuestionDialog | None = None
         # Which conversation the tab's held Claude process belongs to. Bumped
         # whenever those processes are let go, so a wake-up queued before that
         # cannot open a late turn on whatever the tab holds now.
@@ -1044,8 +1041,8 @@ class SessionPanel(wx.Panel):
         # The generation of a wake-up that arrived while the last turn's `done`
         # was still in the mailbox, or None. The late turn starts once it
         # drains, if the conversation it belongs to is still the one here.
-        self._late_turn_waiting: Optional[int] = None
-        self._session_id: Optional[str] = None
+        self._late_turn_waiting: int | None = None
+        self._session_id: str | None = None
         # The Account this tab's Codex conversation is bound to, or UNBOUND
         # until its first turn takes one from the saved choice. A conversation
         # stays on the Account it began on, so choosing another one affects the
@@ -1059,7 +1056,7 @@ class SessionPanel(wx.Panel):
         self._museai_pending_send = False
         # The conversation's name as the tab shows it; the frame keeps it.
         self.tab_title = self._session_title
-        self._worker: Optional[AgentWorker] = None
+        self._worker: AgentWorker | None = None
         self._pending_messages: list[tuple[str, list[str], str]] = []
         self._queue_paused = False
         self._steering_context = ""
@@ -1068,7 +1065,7 @@ class SessionPanel(wx.Panel):
         # conversation. Created on first use rather than here, so a machine
         # without Hermes never imports its adapter -- the same reason
         # ``worker_class`` defers that import.
-        self._held_hermes: Optional[object] = None
+        self._held_hermes: object | None = None
         # Worker callbacks arrive on a background thread. Keep them in one
         # ordered mailbox with at most one pending GUI callback; otherwise a
         # long, chatty job can flood wx's event queue and starve NVDA/key input.
@@ -1090,15 +1087,15 @@ class SessionPanel(wx.Panel):
         # refresh is already out. The list is kept so a change can be told from
         # the same list being read again; None means nothing has been read yet,
         # which is not a change worth announcing.
-        self._known_models: Optional[List[str]] = None
+        self._known_models: list[str] | None = None
         self._model_refresh_running = False
         # Which changed-file discovery is current for this tab, so a worker
         # that finishes after a refresh cannot fill the list it replaced.
         self._changed_files_serial = 0
         # The same for slash-command probes, and the dialog they fill.
         self._slash_commands_serial = 0
-        self._slash_dialog: Optional[SlashCommandDialog] = None
-        self._attachments: List[str] = []
+        self._slash_dialog: SlashCommandDialog | None = None
+        self._attachments: list[str] = []
 
         self.backend_status = wx.StaticText(
             self, label=f"Backend: {backend_label(self._session_backend)}"
@@ -1113,8 +1110,8 @@ class SessionPanel(wx.Panel):
         # the conversation, and hidden -- which takes it out of that order --
         # whenever none is running.
         self._subagents: dict[str, SubagentEntry] = {}
-        self._subagent_ids: List[str] = []
-        self._subagent_view: Optional[SubagentDialog] = None
+        self._subagent_ids: list[str] = []
+        self._subagent_view: SubagentDialog | None = None
         self._subagents_outlive_turn = False
         self.subagents_label = wx.StaticText(self, label="Subagents running:")
         self.subagents = wx.ListBox(self, style=wx.LB_SINGLE)
@@ -1573,7 +1570,7 @@ class SessionPanel(wx.Panel):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _remember_cli_model(self, options: "ModelOptions", backend: Optional[str] = None) -> None:
+    def _remember_cli_model(self, options: ModelOptions, backend: str | None = None) -> None:
         if not self:  # tab closed while the probe was running
             return
         if backend is not None and normalize_backend(backend) != self.selected_backend():
@@ -1614,7 +1611,7 @@ class SessionPanel(wx.Panel):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _models_refreshed(self, backend: str, options: "ModelOptions") -> None:
+    def _models_refreshed(self, backend: str, options: ModelOptions) -> None:
         if not self:  # tab closed while the probe was running
             return
         self._model_refresh_running = False
@@ -1628,7 +1625,7 @@ class SessionPanel(wx.Panel):
         self._announce_model_changes(provider, options.models, previous)
 
     def _announce_model_changes(
-        self, backend: str, models: List[str], previous: Optional[List[str]]
+        self, backend: str, models: list[str], previous: list[str] | None
     ) -> None:
         """Say which models the backend gained or lost since this tab last read.
 
@@ -1677,7 +1674,7 @@ class SessionPanel(wx.Panel):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _show_model_dialog(self, options: "ModelOptions", backend: Optional[str] = None) -> None:
+    def _show_model_dialog(self, options: ModelOptions, backend: str | None = None) -> None:
         if not self:  # tab closed while the probe was running
             return
         provider = normalize_backend(backend or self.selected_backend())
@@ -1733,7 +1730,7 @@ class SessionPanel(wx.Panel):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _note_context(self, seen: Optional[tuple[int, int]]) -> None:
+    def _note_context(self, seen: tuple[int, int] | None) -> None:
         """Keep the context fill the turn reported, and warn once past 80%.
 
         A conversation that fills its window is compacted by the backend
@@ -2191,7 +2188,7 @@ class SessionPanel(wx.Panel):
         self,
         serial: int,
         cwd: str,
-        found: Optional[tuple[str, list[tuple[str, str, bool]]]],
+        found: tuple[str, list[tuple[str, str, bool]]] | None,
         error: str,
     ) -> None:
         """Fill the list from a worker, unless its tab or request is no longer current."""
@@ -2207,7 +2204,7 @@ class SessionPanel(wx.Panel):
         self,
         serial: int,
         cwd: str,
-        found: Optional[tuple[str, list[tuple[str, str, bool]]]],
+        found: tuple[str, list[tuple[str, str, bool]]] | None,
         chosen: int = 0,
     ) -> None:
         """Offer a folder's listing, with an explicit Refresh in place."""
@@ -2399,7 +2396,7 @@ class SessionPanel(wx.Panel):
     def _show_slash_commands(
         self,
         backend: str,
-        cwd: Optional[str],
+        cwd: str | None,
         commands: list[tuple[str, str]],
         probe: bool,
     ) -> None:
@@ -2441,7 +2438,7 @@ class SessionPanel(wx.Panel):
         self,
         serial: int,
         backend: str,
-        cwd: Optional[str],
+        cwd: str | None,
         dlg: SlashCommandDialog,
         shown: list[tuple[str, str]],
     ) -> None:
@@ -2477,7 +2474,7 @@ class SessionPanel(wx.Panel):
         self,
         serial: int,
         backend: str,
-        cwd: Optional[str],
+        cwd: str | None,
         dlg: SlashCommandDialog,
         shown: list[tuple[str, str]],
         found: list[tuple[str, str]],
@@ -2621,7 +2618,7 @@ class SessionPanel(wx.Panel):
         return False
 
     @staticmethod
-    def _save_clipboard_image(bmp: wx.Bitmap) -> Optional[str]:
+    def _save_clipboard_image(bmp: wx.Bitmap) -> str | None:
         fd, path = tempfile.mkstemp(prefix="blindpilot-paste-", suffix=".png")
         os.close(fd)
         if bmp.ConvertToImage().SaveFile(path, wx.BITMAP_TYPE_PNG):
@@ -2757,7 +2754,7 @@ class SessionPanel(wx.Panel):
         event.Skip()
 
     # ----- Mid-run questions -----
-    def _ask_questions(self, questions: Sequence[Question]) -> Optional[list[list[str]]]:
+    def _ask_questions(self, questions: Sequence[Question]) -> list[list[str]] | None:
         """Put a backend's question to the user and wait for the answer.
 
         Called on the worker thread, and blocks it: the turn that asked is
@@ -2775,7 +2772,7 @@ class SessionPanel(wx.Panel):
         # a turn that ended with nobody told a question was waiting.
         self._structured_question_asked = True
         answered = threading.Event()
-        held: dict[str, Optional[list[list[str]]]] = {"answers": None}
+        held: dict[str, list[list[str]] | None] = {"answers": None}
 
         def show() -> None:
             try:
@@ -2892,7 +2889,7 @@ class SessionPanel(wx.Panel):
 
     def _show_question_dialog(
         self, questions: Sequence[Question], *, ended_turn: bool = False
-    ) -> Optional[list[list[str]]]:
+    ) -> list[list[str]] | None:
         """Open the question dialog. GUI thread only."""
         if not self:
             return None
@@ -3480,7 +3477,7 @@ class SessionPanel(wx.Panel):
         first = next((line for line in text.splitlines() if line.strip()), "")
         self._announce(f"{command}: {first}" if first else f"{command} finished")
 
-    def _on_send(self, worker_extra: Optional[dict] = None) -> None:
+    def _on_send(self, worker_extra: dict | None = None) -> None:
         # ``worker_extra`` carries per-turn arguments only some backends take —
         # compaction, at present. Ordinary sends pass nothing.
         #
@@ -3688,17 +3685,17 @@ class SessionPanel(wx.Panel):
         else:
             self._set_status(note)
 
-    def _turn_model(self, send_text: Optional[str], selected_backend: str) -> tuple[str, str]:
+    def _turn_model(self, send_text: str | None, selected_backend: str) -> tuple[str, str]:
         """The explicit model, or the CLI default until a worker resolves Auto."""
         if selected_backend != BACKEND_COMMANDCODE or self.model != AUTO_MODEL:
             return self.model, self.effort
         return "", self.effort
 
-    def _launch_turn(self, send_text: Optional[str], selected_backend: str, extra: dict) -> None:
+    def _launch_turn(self, send_text: str | None, selected_backend: str, extra: dict) -> None:
         """Start the worker for one turn. `send_text` is None for a late turn,
         which has nothing to send and only reads what has already arrived."""
         self._active_send_text = send_text or ""
-        self._turn_started_at: Optional[float] = time.monotonic()
+        self._turn_started_at: float | None = time.monotonic()
         self._turn_attached = False
         self._last_step = ""
         worker_type = worker_class(selected_backend, ClaudeWorker)
@@ -4131,7 +4128,7 @@ class SessionPanel(wx.Panel):
         self._announce("Compacting the conversation")
         self._on_send(worker_extra=extra)
 
-    def restore_history(self, entry: HistoryEntry, turns: List[HistoryTurn]) -> None:
+    def restore_history(self, entry: HistoryEntry, turns: list[HistoryTurn]) -> None:
         """Put a past conversation back in this tab, ready to be continued.
 
         Rows are rebuilt the way a live turn builds them — the user's own
@@ -4202,9 +4199,7 @@ class SessionPanel(wx.Panel):
         # thing in it is a message with no answer yet. Sit in on it so its
         # updates and answer arrive here instead of a blank response.
         if self._session_backend == BACKEND_MUSEAI:
-            self._museai_seen: Optional[int] = max(
-                (turn.sequence or 0 for turn in turns), default=0
-            )
+            self._museai_seen: int | None = max((turn.sequence or 0 for turn in turns), default=0)
         if (
             self._session_backend == BACKEND_MUSEAI
             and turns
@@ -4222,7 +4217,7 @@ class SessionPanel(wx.Panel):
     # running, and follows it again when anything new has happened.
     _MUSEAI_IDLE_CHECK_MS = 30_000
 
-    def _watch_museai_later(self, seen: Optional[int] = None) -> None:
+    def _watch_museai_later(self, seen: int | None = None) -> None:
         if seen is not None:
             self._museai_seen = seen
         if getattr(self, "_museai_watch", None) is None:
@@ -4258,7 +4253,7 @@ class SessionPanel(wx.Panel):
             self._museai_seen = latest
         self._watch_museai_later()
 
-    def _follow_museai(self, session: Optional[str] = None) -> None:
+    def _follow_museai(self, session: str | None = None) -> None:
         """A turn with nothing to send that reads what muse.ai posts next."""
         if (
             not self
@@ -4887,7 +4882,7 @@ class SessionPanel(wx.Panel):
         trustworthy = shown == len(previous)
         keep = self._selected_row()
         term = self._search_term.lower()
-        labels: List[str] = []
+        labels: list[str] = []
         self._displayed = []
         for row in self._rows:
             if term:
@@ -4915,7 +4910,7 @@ class SessionPanel(wx.Panel):
         if keep != wx.NOT_FOUND and labels:
             self._select_row(keep)
 
-    def _append_rows(self, rows: List[Row]) -> None:
+    def _append_rows(self, rows: list[Row]) -> None:
         """Add rows to the end, leaving the reader exactly where they are."""
         if not SETTINGS.text_view:
             self.responses.AppendItems(rows)
@@ -5391,7 +5386,7 @@ class SessionPanel(wx.Panel):
                 return
 
     # ----- Cleanup hook -----
-    def cancel_worker(self, wait: bool = True) -> Optional[threading.Thread]:
+    def cancel_worker(self, wait: bool = True) -> threading.Thread | None:
         """Give up this panel's turn, for a tab closing or the app quitting.
 
         cancel() waits on the process, so `wait=False` hands it to a daemon

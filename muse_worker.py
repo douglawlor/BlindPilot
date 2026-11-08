@@ -35,7 +35,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from collections.abc import Callable, Sequence
 
 from agent_backends import (
     SUBAGENT_COMPLETED,
@@ -178,7 +178,7 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
     def __init__(
         self,
         prompt: str,
-        session_id: Optional[str],
+        session_id: str | None,
         cwd: str,
         permission_mode: str,
         *,
@@ -186,16 +186,16 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
         effort: str = "",
         compact: bool = False,
         resume_only: bool = False,
-        attachments: Optional[Sequence[str]] = None,
+        attachments: Sequence[str] | None = None,
         on_session: Callable[[str], None],
         on_started: Callable[[], None],
         on_activity: Callable[[str, str], None],
         on_complete: Callable[[str], None],
         on_failed: Callable[[str], None],
         on_done: Callable[[], None],
-        on_question: Optional[AskQuestions] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
-        on_subagent: Optional[SubagentReport] = None,
+        on_question: AskQuestions | None = None,
+        on_permission: Callable[[str, dict, list], dict] | None = None,
+        on_subagent: SubagentReport | None = None,
     ) -> None:
         super().__init__(daemon=True)
         self._prompt = prompt
@@ -219,7 +219,7 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
         self._on_permission = on_permission
         self._on_subagent = on_subagent or ignore_subagents
 
-        self._transport: Optional[StdioTransport] = None
+        self._transport: StdioTransport | None = None
         self._cancelled = False
         self._clean_end = False
         self._failed = False
@@ -267,7 +267,7 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
         self._subagent_control: dict[str, str] = {}
         self._workflows: dict[str, str] = {}
         # Fired commands awaiting their reply: id -> (method, params, may retry).
-        self._fired: dict[object, tuple[str, Optional[dict], bool]] = {}
+        self._fired: dict[object, tuple[str, dict | None, bool]] = {}
 
     # -- public surface the window drives ---------------------------------
 
@@ -333,7 +333,7 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
 
     # -- protocol plumbing -------------------------------------------------
 
-    def _fire(self, method: str, params: Optional[dict] = None, retry: bool = True) -> bool:
+    def _fire(self, method: str, params: dict | None = None, retry: bool = True) -> bool:
         """One request sent without waiting for its reply.
 
         Steering, cancelling, and answering questions all write from a thread
@@ -378,8 +378,8 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
         self._on_activity("tool", f"Muse Code refused: {self._error_text(error)}")
 
     def _request(
-        self, method: str, params: Optional[dict] = None, timeout: float = 45.0
-    ) -> Optional[dict]:
+        self, method: str, params: dict | None = None, timeout: float = 45.0
+    ) -> dict | None:
         """One request, its reply awaited, streaming frames parked."""
         transport = self._transport
         if transport is None or not transport.connected():
@@ -695,7 +695,7 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
             return
         # Annotated because it is first bound by the parked-frames loop (always
         # a dict) and then reassigned from receive(), which answers None.
-        frame: Optional[dict]
+        frame: dict | None
         while not self._cancelled:
             access_error = self._provider_access_error()
             if access_error:
@@ -1351,7 +1351,7 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
         self,
         params: dict,
         questions: Sequence[Question],
-        answers: Optional[list[list[str]]],
+        answers: list[list[str]] | None,
     ) -> None:
         # MSP wants exactly one of selectedLabel, selectedLabels or freeText
         # per question, labels from the offered options only, and answers
@@ -1488,7 +1488,7 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
 
     def _page_replay(self) -> None:
         """Read the transcript back a page at a time, oldest first."""
-        cursor: Optional[str] = None
+        cursor: str | None = None
         for _ in range(_REPLAY_MAX_PAGES):
             params: dict = {"sessionId": self._live_session, "limit": 200}
             if cursor:
@@ -1524,7 +1524,7 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
         self._answer_streamer.flush()
 
 
-def _skill_invocation(text: str, cwd: str) -> Optional[tuple[str, str]]:
+def _skill_invocation(text: str, cwd: str) -> tuple[str, str] | None:
     """(selector, arguments) when the prompt calls a Muse skill, else None.
 
     Only the first token counts, and only when the CLI lists it: a path that

@@ -35,7 +35,6 @@ import re
 import subprocess
 import threading
 import time
-from typing import Optional
 
 from owned_process import owned_popen
 from agent_backends import (
@@ -82,7 +81,7 @@ def _plain(text: object) -> str:
     return " ".join(str(text or "").replace("⁨", "").replace("⁩", "").split())
 
 
-def _epoch_ms(stamp: object) -> Optional[float]:
+def _epoch_ms(stamp: object) -> float | None:
     try:
         when = datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
     except ValueError:
@@ -153,7 +152,7 @@ def activity_rows(
     return rows
 
 
-def _json_from(text: str) -> Optional[dict]:
+def _json_from(text: str) -> dict | None:
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end <= start:
         return None
@@ -170,7 +169,7 @@ class MuseAiWorker(_TurnWorker):
     _backend = BACKEND_MUSEAI
 
     def _setup(self) -> None:
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: subprocess.Popen | None = None
         # Each message's text as last read: muse.ai marks a message complete
         # while its text is still arriving, so one is taken only once two
         # reads in a row agree on it.
@@ -180,14 +179,14 @@ class MuseAiWorker(_TurnWorker):
         self._steps: list[tuple[int, int]] = []
         # The newest event seen in the chat, for the tab to watch past.
         self.last_seq = 0
-        self.follow_after: Optional[int] = None
+        self.follow_after: int | None = None
         self._step_said = ""
         self._approval_seen: set[str] = set()
         self._approval_error_said = False
         # `muse-cli watch`, streaming the chat's live status ("Fetching
         # release") while the turn runs; while it does, the step count is
         # left alone.
-        self._watcher: Optional[subprocess.Popen] = None
+        self._watcher: subprocess.Popen | None = None
         self._live_status = False
         # The newest event of any kind in the chat as last read: the message
         # this turn sends is the first user message past it. -1 until a read
@@ -199,7 +198,7 @@ class MuseAiWorker(_TurnWorker):
         # `_baseline` (the chat as it stood before this turn) count.
         self._relayed: set[str] = set()
         self._relay_lock = threading.Lock()
-        self._baseline: Optional[int] = None
+        self._baseline: int | None = None
 
     def _check_approvals(self, binary: str) -> None:
         from museai_backend import (
@@ -304,7 +303,7 @@ class MuseAiWorker(_TurnWorker):
         # nothing, so the work under way is the work being followed.
         prompt = " ".join((self._prompt or "").split())
         anchored = not prompt
-        sent_ms: Optional[float] = None
+        sent_ms: float | None = None
         first_seen: dict[str, float] = {}
         waiting: list[tuple[str, str]] = []
         listed = ""
@@ -433,8 +432,8 @@ class MuseAiWorker(_TurnWorker):
             end_process_group(proc)
 
     def _run(
-        self, binary: str, args: list[str], timeout: Optional[float], track: bool = False
-    ) -> tuple[Optional[int], str, str]:
+        self, binary: str, args: list[str], timeout: float | None, track: bool = False
+    ) -> tuple[int | None, str, str]:
         """Run muse-cli once. `track` marks the send, the one Stop ends."""
         env = subprocess_env(binary)
         env["PYTHONIOENCODING"] = "utf-8"
@@ -580,7 +579,7 @@ class MuseAiWorker(_TurnWorker):
                 if message_id != skip:
                     self._relay(seq, message_id, text)
 
-        sent: dict[str, tuple[Optional[int], str, str]] = {}
+        sent: dict[str, tuple[int | None, str, str]] = {}
         args = ["send", "--thread", session, "--wait", str(REPLY_WAIT_SECONDS), self._prompt]
         sender = threading.Thread(
             target=lambda: sent.update(
@@ -662,7 +661,7 @@ class MuseAiWorker(_TurnWorker):
             "muse.ai is still working after an hour. Reopen the chat later to read its answer."
         )
 
-    def _watch(self, binary: str, session: str, baseline: int, answer: str = "") -> Optional[str]:
+    def _watch(self, binary: str, session: str, baseline: int, answer: str = "") -> str | None:
         """Relay what the agent posts until it has answered and gone quiet.
 
         Its latest direct answer is the turn's answer. Quiet means no event of

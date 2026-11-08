@@ -26,7 +26,7 @@ import bisect
 import html
 import re
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 from markdown_it import MarkdownIt
 
@@ -130,9 +130,9 @@ class Row:
     label: str
     payload: str
     response_number: int
-    language: Optional[str] = None  # display name, code rows only
-    lang_token: Optional[str] = None  # raw fence info word, code rows only
-    source: Optional[str] = None  # original Markdown on headers, before speech cleanup
+    language: str | None = None  # display name, code rows only
+    lang_token: str | None = None  # raw fence info word, code rows only
+    source: str | None = None  # original Markdown on headers, before speech cleanup
     speaker: str = ""  # explicit attribution on the first row of an assistant message
 
 
@@ -177,7 +177,7 @@ def _inline_plain_text(inline_tok) -> str:
     in between, so concatenating the text (and inline code) children yields the
     readable string with the syntax markers dropped.
     """
-    parts: List[str] = []
+    parts: list[str] = []
     for child in inline_tok.children or []:
         if child.type in ("text", "code_inline"):
             parts.append(child.content)
@@ -273,7 +273,7 @@ def _code_row(tok, response_number: int) -> Row:
     )
 
 
-def _prose_row(text: str, response_number: int, label: Optional[str] = None) -> Row:
+def _prose_row(text: str, response_number: int, label: str | None = None) -> Row:
     return Row(
         kind="prose",
         label=_flatten(text) if label is None else label,
@@ -282,7 +282,7 @@ def _prose_row(text: str, response_number: int, label: Optional[str] = None) -> 
     )
 
 
-def _emit_table(inner: list, rows: List[Row], response_number: int) -> None:
+def _emit_table(inner: list, rows: list[Row], response_number: int) -> None:
     """One prose row per table row, cells read out in plain words.
 
     The header row comes first, as written. A screen reader has no way to
@@ -298,7 +298,7 @@ def _emit_table(inner: list, rows: List[Row], response_number: int) -> None:
             rows.append(_prose_row(text, response_number, label=f"Row: {text}"))
 
 
-def _emit(tokens: list, rows: List[Row], response_number: int) -> None:
+def _emit(tokens: list, rows: list[Row], response_number: int) -> None:
     """Walk a token sequence, appending prose and code rows in document order."""
     i = 0
     n = len(tokens)
@@ -344,7 +344,7 @@ def _emit(tokens: list, rows: List[Row], response_number: int) -> None:
         i += 1
 
 
-def parse_response(text: str, response_number: int, speaker: str = "") -> List[Row]:
+def parse_response(text: str, response_number: int, speaker: str = "") -> list[Row]:
     """Segment one assistant response into an ordered list of rows.
 
     The first row is always the header (``"Response N"``), whose payload is the
@@ -360,7 +360,7 @@ def parse_response(text: str, response_number: int, speaker: str = "") -> List[R
         source=text or "",
         speaker=speaker,
     )
-    rows: List[Row] = [header]
+    rows: list[Row] = [header]
     if not full:
         return rows
     tokens = _MD.parse(full)
@@ -399,7 +399,7 @@ def _transcript_block(row: Row) -> str:
     return f"{row.speaker}: {row.payload}" if row.speaker and row.payload else row.payload
 
 
-def reassemble(rows: List[Row], response_number: int) -> str:
+def reassemble(rows: list[Row], response_number: int) -> str:
     """Everything the list holds for one response, for 'copy whole response'.
 
     Walks that response's rows in list order — your own message, thinking, tool
@@ -411,7 +411,7 @@ def reassemble(rows: List[Row], response_number: int) -> str:
     code rows already carry. If a response somehow has nothing but a header (no
     segments arrived), its payload is used so the copy is never empty.
     """
-    blocks: List[str] = []
+    blocks: list[str] = []
     header_payload = ""
     for row in rows:
         if row.response_number != response_number:
@@ -450,14 +450,14 @@ def markdown_page(text: str, title: str) -> str:
     )
 
 
-def reassemble_all(rows: List[Row], header: str = "Response {}") -> str:
+def reassemble_all(rows: list[Row], header: str = "Response {}") -> str:
     """Every row in the list, start to finish, for 'copy whole conversation'.
 
     Same rendering as :func:`reassemble`, in one run over the whole list, with
     each response header kept as a ``Response N`` line so the responses stay
     told apart. An export passes ``"## Response {}"`` to make those headings.
     """
-    blocks: List[str] = []
+    blocks: list[str] = []
     for row in rows:
         if row.kind == "header":
             blocks.append(header.format(row.response_number))
@@ -489,16 +489,16 @@ def _one_line(label: str) -> str:
     return " ".join(label.split())
 
 
-def _row_at(starts: List[int], position: int) -> int:
+def _row_at(starts: list[int], position: int) -> int:
     """Which row a caret position is in, by each row's start offset."""
     if not starts:
         return -1
     return max(0, bisect.bisect_right(starts, position) - 1)
 
 
-def _starts_of(lines: List[str]) -> List[int]:
+def _starts_of(lines: list[str]) -> list[int]:
     """Each line's start offset once every line is joined with a newline."""
-    starts: List[int] = []
+    starts: list[int] = []
     offset = 0
     for line in lines:
         starts.append(offset)

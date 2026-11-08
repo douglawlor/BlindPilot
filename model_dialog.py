@@ -23,7 +23,6 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field, replace
-from typing import List, Optional
 
 from agent_backends import (
     BACKEND_ANTIGRAVITY,
@@ -77,8 +76,8 @@ def _plain(text: str) -> str:
 class ModelOptions:
     """What a backend reports it can be asked for, plus what it is using now."""
 
-    models: List[str]
-    efforts: List[str]
+    models: list[str]
+    efforts: list[str]
     current_model: str = ""  # display name, e.g. "Opus 5"
     current_effort: str = ""  # e.g. "medium"
     error: str = ""  # non-empty when the probe fell back to defaults
@@ -115,7 +114,7 @@ class ModelDialog(wx.Dialog):
     def __init__(
         self,
         parent: wx.Window,
-        options: "ModelOptions",
+        options: ModelOptions,
         selected_model: str,
         selected_effort: str,
         backend_name: str = "CLI",
@@ -158,13 +157,11 @@ class ModelDialog(wx.Dialog):
         )
         self.model_box.SetName("Model")
         self.model_box.SetValue(
-            (
-                AUTO_MODEL_CHOICE
-                if selected_model == AUTO_MODEL and allow_auto_model
-                else _model_choice(selected_model, options.labels)
-                if selected_model
-                else self._model_keep
-            )
+            AUTO_MODEL_CHOICE
+            if selected_model == AUTO_MODEL and allow_auto_model
+            else _model_choice(selected_model, options.labels)
+            if selected_model
+            else self._model_keep
         )
 
         efforts = list(options.efforts)
@@ -239,7 +236,7 @@ _FALLBACK_MODELS = ["default", "opus", "sonnet", "haiku", "fable", "opusplan"]
 _FALLBACK_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 
 
-def _parse_model_aliases(text: str) -> List[str]:
+def _parse_model_aliases(text: str) -> list[str]:
     """Model names out of the CLI's `/model` usage line.
 
     The line looks like::
@@ -250,7 +247,7 @@ def _parse_model_aliases(text: str) -> List[str]:
     if not match:
         return []
     tail = match.group(1).strip().rstrip(".")
-    names: List[str] = []
+    names: list[str] = []
     for part in tail.split(","):
         name = part.strip().rstrip(".")
         # Drop the trailing prose ("or a full model ID") and any stray blanks;
@@ -279,7 +276,7 @@ def _parse_alias_target(text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def _parse_effort_levels(help_text: str) -> List[str]:
+def _parse_effort_levels(help_text: str) -> list[str]:
     """Effort levels out of the `--effort <level>` entry in `claude --help`.
 
     The help text is hard-wrapped, so it is flattened before matching:
@@ -296,7 +293,7 @@ def _parse_effort_levels(help_text: str) -> List[str]:
     return [lv for lv in levels if lv and " " not in lv]
 
 
-def _run_claude(binary: str, args: List[str], cwd: Optional[str], timeout: int) -> str:
+def _run_claude(binary: str, args: list[str], cwd: str | None, timeout: int) -> str:
     """Run the CLI and return stdout+stderr, or "" if it could not be run."""
     try:
         result = subprocess.run(
@@ -316,7 +313,7 @@ def _run_claude(binary: str, args: List[str], cwd: Optional[str], timeout: int) 
     return (result.stdout or "") + (result.stderr or "")
 
 
-def _resolve_claude_aliases(binary: str, aliases: List[str], cwd: Optional[str]) -> dict:
+def _resolve_claude_aliases(binary: str, aliases: list[str], cwd: str | None) -> dict:
     """Ask the CLI what each alias means today, all at once.
 
     Claude Code lists only aliases ("opus"), which says nothing about which
@@ -365,15 +362,15 @@ def _cli_stamp(binary: str) -> str:
 
 
 def _remember_model_options(
-    backend: str, cwd: Optional[str], binary: str, options: ModelOptions
+    backend: str, cwd: str | None, binary: str, options: ModelOptions
 ) -> None:
     with _probe_lock:
         _probe_cache[f"{backend}:{cwd or ''}"] = (time.time(), options, _cli_stamp(binary))
 
 
 def cached_model_options(
-    cwd: Optional[str], max_age: float, backend: str = BACKEND_CLAUDE
-) -> Optional[ModelOptions]:
+    cwd: str | None, max_age: float, backend: str = BACKEND_CLAUDE
+) -> ModelOptions | None:
     """A probe result no older than `max_age` seconds, or None.
 
     Never blocks, so it is safe on the GUI thread: the CLI is not searched
@@ -393,7 +390,7 @@ def cached_model_options(
 
 
 def probe_model_options(
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
     max_age: float = 0,
     backend: str = BACKEND_CLAUDE,
 ) -> ModelOptions:
@@ -520,7 +517,7 @@ def probe_model_options(
 
     # The two probes are independent, so the help text is fetched while the
     # slower `/model` status call is still running.
-    help_text: List[str] = []
+    help_text: list[str] = []
     help_thread = threading.Thread(
         target=lambda: help_text.append(_run_claude(binary, ["--help"], None, 30)),
         daemon=True,

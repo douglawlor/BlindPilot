@@ -21,10 +21,9 @@ import os
 import ssl
 import urllib.request
 from functools import lru_cache
-from typing import Optional
 
 
-def _certifi_bundle() -> Optional[str]:
+def _certifi_bundle() -> str | None:
     """The path to the bundled Mozilla root list, if this build carries one."""
     try:
         import certifi
@@ -63,6 +62,6 @@ def certificate_context() -> ssl.SSLContext:
     return context
 
 
-def open_url(request, timeout: Optional[float] = None):
+def open_url(request, timeout: float | None = None):
     """urlopen, verifying against the store above rather than OpenSSL's guess."""
     return urllib.request.urlopen(request, timeout=timeout, context=certificate_context())

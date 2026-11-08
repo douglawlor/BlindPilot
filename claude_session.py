@@ -19,7 +19,8 @@ import threading
 import uuid
 import weakref
 from dataclasses import dataclass, replace
-from typing import Callable, Optional, cast
+from typing import cast
+from collections.abc import Callable
 
 import backend_pool
 from owned_process import owned_popen
@@ -68,7 +69,7 @@ class Wants:
     permission_mode: str
     model: str = ""
     effort: str = ""
-    session_id: Optional[str] = None
+    session_id: str | None = None
 
 
 ASK_THROUGH_THE_TOOL = ask_through_the_tool("AskUserQuestion")
@@ -123,16 +124,16 @@ class ClaudeSession:
     def __init__(self, proc: subprocess.Popen, wants: Wants) -> None:
         self._proc = proc
         self.wants = wants
-        self.session_id: Optional[str] = wants.session_id
+        self.session_id: str | None = wants.session_id
         # Whether Remote Control is on for this process; it lasts as long
         # as the process, so it is asked for once, not every turn.
         self.remote_control_on = False
         self._write_lock = threading.Lock()
         self._state = threading.Lock()
-        self._sink: Optional[queue.Queue] = None
+        self._sink: queue.Queue | None = None
         self._pending: list = []
         self._pending_dropped = 0
-        self._idle_sink: Optional[Callable[[], None]] = None
+        self._idle_sink: Callable[[], None] | None = None
         self._idle_told = False
         self._waiting: dict[str, tuple[threading.Event, dict]] = {}
         self._stderr: list[str] = []
@@ -151,7 +152,7 @@ class ClaudeSession:
         self.background_agents: set[str] = set()
         # Called on every event the CLI sends, so the pool's idle clock
         # measures silence from the CLI rather than time since the last prompt.
-        self.on_event: Optional[Callable[[], None]] = None
+        self.on_event: Callable[[], None] | None = None
         self._reader = threading.Thread(target=self._read, name="claude-reader", daemon=True)
         self._drainer = threading.Thread(
             target=self._drain_stderr, name="claude-stderr", daemon=True
@@ -165,8 +166,8 @@ class ClaudeSession:
         binary: str,
         wants: Wants,
         prompt_tool: str,
-        popen_kwargs: Optional[dict] = None,
-    ) -> "ClaudeSession":
+        popen_kwargs: dict | None = None,
+    ) -> ClaudeSession:
         proc = _popen(
             build_command(binary, wants, prompt_tool),
             cwd=wants.cwd,
@@ -226,7 +227,7 @@ class ClaudeSession:
         with self._state:
             return self._sink is not None
 
-    def _deliver(self, event: Optional[dict]) -> None:
+    def _deliver(self, event: dict | None) -> None:
         tell = None
         with self._state:
             if self._sink is not None:
@@ -315,8 +316,8 @@ class ClaudeSession:
         )
 
     def send_control(
-        self, subtype: str, timeout: Optional[float] = None, **fields: object
-    ) -> Optional[dict]:
+        self, subtype: str, timeout: float | None = None, **fields: object
+    ) -> dict | None:
         """Ask the CLI something and wait for its answer, or None on silence."""
         if timeout is None:
             timeout = _CONTROL_SECONDS
@@ -341,7 +342,7 @@ class ClaudeSession:
                 self._waiting.pop(request_id, None)
 
     @staticmethod
-    def _confirmed(response: Optional[dict]) -> bool:
+    def _confirmed(response: dict | None) -> bool:
         return response is not None and response.get("subtype") == "success"
 
     def stop_agents(self) -> None:
@@ -355,7 +356,7 @@ class ClaudeSession:
         for task_id in list(self.agent_tasks):
             self.send_control("stop_task", timeout=_STOP_TASK_SECONDS, task_id=task_id)
 
-    def interrupt(self, timeout: Optional[float] = None) -> bool:
+    def interrupt(self, timeout: float | None = None) -> bool:
         """Whether the CLI confirmed the running turn was stopped."""
         if timeout is None:
             timeout = _INTERRUPT_SECONDS
@@ -419,10 +420,10 @@ class ClaudeSession:
             stopped = self._stopped
         return not stopped and self._proc.poll() is None
 
-    def returncode(self) -> Optional[int]:
+    def returncode(self) -> int | None:
         return self._proc.poll()
 
-    def wait(self, timeout: float = 2.0) -> Optional[int]:
+    def wait(self, timeout: float = 2.0) -> int | None:
         """The exit code, waiting briefly for one. None if it never arrived.
 
         A stream that has ended is not yet a process that has been reaped, so
@@ -492,7 +493,7 @@ def claude_adapter() -> backend_pool.Adapter:
 # Taking and starting happen under one lock per tab, so two turns in the same
 # tab can never both start a process, while one tab's slow model change never
 # holds up another tab's turn.
-_panel_locks: "weakref.WeakKeyDictionary[object, threading.Lock]" = weakref.WeakKeyDictionary()
+_panel_locks: weakref.WeakKeyDictionary[object, threading.Lock] = weakref.WeakKeyDictionary()
 _panel_locks_guard = threading.Lock()
 # Panels are weakly referenced above, and None cannot be, so the shared slot
 # backend_pool.pool_key uses when there is no panel keeps a lock of its own.
@@ -516,11 +517,11 @@ def take_or_start(
     wants: Wants,
     binary: str,
     prompt_tool: str = "",
-    idle_sink: Optional[Callable[[], None]] = None,
-    popen_kwargs: Optional[dict] = None,
+    idle_sink: Callable[[], None] | None = None,
+    popen_kwargs: dict | None = None,
     *,
     late: bool = False,
-) -> Optional[ClaudeSession]:
+) -> ClaudeSession | None:
     """The process this turn speaks through, the tab's held one or a new one.
 
     A held process is reused when it can serve the conversation and accepts
@@ -535,7 +536,7 @@ def take_or_start(
     shared = backend_pool.pool()
     with _lock_for(panel):
         held = shared.take(key)
-        session = cast(Optional[ClaudeSession], held.handle if held is not None else None)
+        session = cast(ClaudeSession | None, held.handle if held is not None else None)
         if late:
             # The events this turn was woken for are in that process. Stopping
             # it to apply a model change, or starting a fresh one, would throw

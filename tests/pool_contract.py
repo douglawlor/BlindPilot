@@ -8,7 +8,7 @@ rather than handed to the next turn. This is the transport contract's argument
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import backend_pool
 

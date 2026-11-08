@@ -20,7 +20,8 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Protocol
+from typing import Protocol
+from collections.abc import Callable
 from urllib.parse import urlparse
 from urllib.request import Request
 
@@ -72,7 +73,7 @@ INSTALL_SETUP = "setup"
 INSTALL_PORTABLE = "portable"
 
 
-def install_kind(executable: Optional[Path] = None) -> str:
+def install_kind(executable: Path | None = None) -> str:
     """Say whether this copy was put here by the installer or unpacked by hand.
 
     The two need different updates. A copy from the setup program is registered
@@ -92,9 +93,9 @@ def install_kind(executable: Optional[Path] = None) -> str:
 
 
 def asset_name_for_platform(
-    system: Optional[str] = None,
-    machine: Optional[str] = None,
-    kind: Optional[str] = None,
+    system: str | None = None,
+    machine: str | None = None,
+    kind: str | None = None,
 ) -> str:
     """Return the release asset expected by this operating system and CPU."""
     system = (system or platform.system()).casefold()
@@ -133,7 +134,7 @@ class HttpResponse(Protocol):
 
     def read(self, amount: int = -1, /) -> bytes: ...
 
-    def __enter__(self) -> "HttpResponse": ...
+    def __enter__(self) -> HttpResponse: ...
 
     def __exit__(self, *exc_info: object) -> object: ...
 
@@ -142,7 +143,7 @@ class HttpResponse(Protocol):
 Opener = Callable[..., HttpResponse]
 
 
-def _verified_urlopen(request: Request, timeout: Optional[float] = None) -> HttpResponse:
+def _verified_urlopen(request: Request, timeout: float | None = None) -> HttpResponse:
     """The real opener: GitHub over a trust store a packaged build still has."""
     return open_url(request, timeout=timeout)
 
@@ -164,9 +165,9 @@ def fetch_latest_release(
     current_version: str,
     *,
     opener: Opener = _verified_urlopen,
-    system: Optional[str] = None,
-    machine: Optional[str] = None,
-    kind: Optional[str] = None,
+    system: str | None = None,
+    machine: str | None = None,
+    kind: str | None = None,
 ) -> ReleaseInfo:
     """Query GitHub at runtime and select the asset for this computer."""
     try:
@@ -256,8 +257,8 @@ def download_update(
     release: ReleaseInfo,
     current_version: str,
     *,
-    progress: Optional[Callable[[int, int], None]] = None,
-    cancel: Optional[threading.Event] = None,
+    progress: Callable[[int, int], None] | None = None,
+    cancel: threading.Event | None = None,
     opener: Opener = _verified_urlopen,
 ) -> Path:
     """Download a release archive and reject it unless SHA-256 matches."""
@@ -1091,7 +1092,7 @@ def schedule_install(archive: Path) -> None:
         # A stale reason from a previous attempt must not be reported as this
         # one's outcome.
         clear_pending_failure()
-        helper: Optional[Path] = None
+        helper: Path | None = None
         try:
             fd, helper_name = tempfile.mkstemp(prefix=TEMPORARY_PREFIX, suffix=".ps1")
             os.close(fd)

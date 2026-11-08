@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from collections.abc import Iterable
 from urllib.parse import quote, unquote
 
 LIST_TOOL = "ListAgents"
@@ -73,7 +73,7 @@ def parse_list(text: str) -> list[RemoteSession]:
     return sessions
 
 
-def latest_list(results: Iterable[str]) -> Optional[list[RemoteSession]]:
+def latest_list(results: Iterable[str]) -> list[RemoteSession] | None:
     """The newest ListAgents result among ``results``, parsed; None if there is none."""
     found = None
     for text in results:
@@ -123,7 +123,7 @@ def session_link(backend: str, session_id: str) -> str:
     return f"{LINK_SCHEME}://open/{backend}/{quote(session_id, safe='')}"
 
 
-def parse_session_link(text: str) -> Optional[tuple[str, str]]:
+def parse_session_link(text: str) -> tuple[str, str] | None:
     """(backend, session id) from a session link, or None for anything else."""
     match = _LINK.match((text or "").strip())
     if not match:

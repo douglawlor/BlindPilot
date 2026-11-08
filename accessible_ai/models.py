@@ -78,7 +78,7 @@ class Profile:
     temperature: float | None = None
     max_output_tokens: int | None = None
     streaming: bool | None = None
-    openrouter: "OpenRouterFeatures" = field(default_factory=lambda: OpenRouterFeatures())
+    openrouter: OpenRouterFeatures = field(default_factory=lambda: OpenRouterFeatures())
     # Whether Chat mode starts on this profile. At most one profile carries it.
     is_default: bool = False
 
@@ -252,7 +252,7 @@ class OpenRouterFeatures:
         }
 
     @classmethod
-    def from_dict(cls, payload: Any) -> "OpenRouterFeatures":
+    def from_dict(cls, payload: Any) -> OpenRouterFeatures:
         """Read back what was stored, ignoring anything unrecognisable.
 
         A profile written by a newer release, or edited by hand, must not stop

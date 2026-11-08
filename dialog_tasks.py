@@ -7,7 +7,7 @@ worker result is delivered through.
 from __future__ import annotations
 
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 import wx
 

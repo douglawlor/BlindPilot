@@ -42,7 +42,7 @@ import threading
 import time
 import uuid  # noqa: F401
 from pathlib import Path
-from typing import Callable, Optional  # noqa: F401
+from collections.abc import Callable  # noqa: F401
 
 import wx
 import wx.adv

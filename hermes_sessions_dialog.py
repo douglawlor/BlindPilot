@@ -17,7 +17,7 @@ from -- for example ``hermes_sessions_dialog.hermes_session_catalog``.
 
 from __future__ import annotations
 
-from typing import Optional, cast
+from typing import cast
 
 import wx
 
@@ -108,8 +108,8 @@ class HermesSessionsDialog(wx.Dialog):
         self._entries: list[dict] = []
         self._shown: list[dict] = []
         self._live: set[str] = set()
-        self.entry: Optional[dict] = None
-        self.webview_entry: Optional[HistoryEntry] = None
+        self.entry: dict | None = None
+        self.webview_entry: HistoryEntry | None = None
         self.attaching = False
         self._load_task = TaskSlot(_call_after_alive)
         self._loading = False
@@ -274,7 +274,7 @@ class HermesSessionsDialog(wx.Dialog):
         if button is not None:
             button.Enable(enabled)
 
-    def _selected(self) -> Optional[dict]:
+    def _selected(self) -> dict | None:
         index = self.list_box.GetSelection()
         if index == wx.NOT_FOUND or index >= len(self._shown):
             return None

@@ -6,7 +6,7 @@ import re
 import threading
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import wx
 
@@ -66,7 +66,7 @@ class UpdateDialog(wx.Dialog):
         current_version: str,
         speak: Callable[[str], None],
         start_check: bool = True,
-        confirm_install: Optional[Callable[[], bool]] = None,
+        confirm_install: Callable[[], bool] | None = None,
     ):
         super().__init__(
             parent,
@@ -77,10 +77,10 @@ class UpdateDialog(wx.Dialog):
         self.SetSize(self.FromDIP(FULL_SIZE))
         self.current_version = current_version
         self.speak = speak
-        self.release: Optional[ReleaseInfo] = None
-        self.archive: Optional[Path] = None
+        self.release: ReleaseInfo | None = None
+        self.archive: Path | None = None
         self.cancel_event = threading.Event()
-        self.worker: Optional[threading.Thread] = None
+        self.worker: threading.Thread | None = None
         self.restart_pending = False
         # Asked just before installing, which closes BlindPilot: False keeps it
         # open, because a running turn or an unsent message would be lost.
@@ -143,7 +143,7 @@ class UpdateDialog(wx.Dialog):
         self,
         message: str,
         *,
-        primary: Optional[str],
+        primary: str | None,
         secondary: str,
         notes: str = "",
         show_progress: bool = False,
@@ -259,7 +259,7 @@ class UpdateDialog(wx.Dialog):
             return
         _call_after(self._check_finished, release)
 
-    def _check_finished(self, release: Optional[ReleaseInfo]) -> None:
+    def _check_finished(self, release: ReleaseInfo | None) -> None:
         if self._closing:
             return
         if release is None or not release.is_newer_than(self.current_version):

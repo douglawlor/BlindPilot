@@ -5,7 +5,8 @@ import mimetypes
 import threading
 from pathlib import Path
 from threading import Event
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 import wx
 

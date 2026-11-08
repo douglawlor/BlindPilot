@@ -16,7 +16,7 @@ import os
 import subprocess
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import wx
 
@@ -211,7 +211,7 @@ class MainFrame(wx.Frame):
         self._chat_model_order = _valid_chat_model_order(cfg.get("chat_model_order"))
         self.chat_panel = None
         pf = cfg.get("projects_folder")
-        self._projects_folder: Optional[str] = pf if pf and os.path.isdir(pf) else None
+        self._projects_folder: str | None = pf if pf and os.path.isdir(pf) else None
 
         # ----- Menu bar (gives us standard Cmd+T / Cmd+W on Mac) -----
         # Items that act on the visible session tab. Greyed out in Chat mode,
@@ -220,25 +220,25 @@ class MainFrame(wx.Frame):
         # their own that already know the mode.
         self._agent_menu_items: list[wx.MenuItem] = []
         # The two sessions in an agent conversation, while one runs.
-        self._relay: Optional[dict] = None
+        self._relay: dict | None = None
         self._find_all_serial = 0
-        self._find_all_progress: Optional[wx.ProgressDialog] = None
-        self._find_all_cancel: Optional[threading.Event] = None
+        self._find_all_progress: wx.ProgressDialog | None = None
+        self._find_all_cancel: threading.Event | None = None
         self._history_open_serial = 0
-        self._history_open_cancel: Optional[threading.Event] = None
-        self._history_open_progress: Optional[wx.Dialog] = None
-        self._history_open_message: Optional[wx.StaticText] = None
-        self._history_open_cancel_button: Optional[wx.Button] = None
+        self._history_open_cancel: threading.Event | None = None
+        self._history_open_progress: wx.Dialog | None = None
+        self._history_open_message: wx.StaticText | None = None
+        self._history_open_cancel_button: wx.Button | None = None
         self._agent_files_cache: dict[str, list[AgentFiles]] = {}
         self._agent_files_serial = 0
         # Session links handed over by a second copy; watched only once the
         # window is shown (`watch_for_links`), never in a window built and torn
         # down by a check, where a timer firing mid-teardown crashed macOS.
-        self._links_timer: Optional[wx.Timer] = None
+        self._links_timer: wx.Timer | None = None
         # Re-reads every tab's model catalog on a timer, so a model retired
         # upstream drops out of the picker on a window left open. Watched only
         # once the window is shown, like the links timer above.
-        self._model_timer: Optional[wx.Timer] = None
+        self._model_timer: wx.Timer | None = None
         self._desktop_shortcut_serial = 0
         self._desktop_shortcut_running = False
         menubar = wx.MenuBar()
@@ -776,7 +776,7 @@ class MainFrame(wx.Frame):
         event.Skip()
 
     @staticmethod
-    def _focus_is_within(focus: Optional[wx.Window], control: wx.Window) -> bool:
+    def _focus_is_within(focus: wx.Window | None, control: wx.Window) -> bool:
         """Include native child windows used internally by combo controls."""
         current = focus
         while current is not None:
@@ -786,7 +786,7 @@ class MainFrame(wx.Frame):
         return False
 
     @staticmethod
-    def _moved_focus(focus: Optional[wx.Window], move: Callable[[], None]) -> bool:
+    def _moved_focus(focus: wx.Window | None, move: Callable[[], None]) -> bool:
         """Perform a boundary move, and report whether focus really left.
 
         Routing that claims a Tab it did not act on is a keyboard trap: the
@@ -797,7 +797,7 @@ class MainFrame(wx.Frame):
         move()
         return wx.Window.FindFocus() is not focus
 
-    def _route_agent_tab(self, focus: Optional[wx.Window], shift: bool) -> bool:
+    def _route_agent_tab(self, focus: wx.Window | None, shift: bool) -> bool:
         """Route focus across Agent-page boundaries before native traversal."""
         if self._app_mode != APP_MODE_AGENT:
             return False
@@ -1230,7 +1230,7 @@ class MainFrame(wx.Frame):
         self._update_checking = True
 
         def work() -> None:
-            release: Optional[ReleaseInfo] = None
+            release: ReleaseInfo | None = None
             try:
                 release = fetch_latest_release(APP_VERSION)
             except UpdateError:
@@ -1317,7 +1317,7 @@ class MainFrame(wx.Frame):
         ) as dialog:
             dialog.ShowModal()
 
-    def _on_update_checked(self, release: Optional[ReleaseInfo]) -> None:
+    def _on_update_checked(self, release: ReleaseInfo | None) -> None:
         self._update_checking = False
         if release is None or not release.is_newer_than(APP_VERSION):
             return
@@ -1328,7 +1328,7 @@ class MainFrame(wx.Frame):
         self._set_status_text(message)
         announce(message)
 
-    def _session_panels(self) -> list["SessionPanel"]:
+    def _session_panels(self) -> list[SessionPanel]:
         pages = (self.notebook.GetPage(i) for i in range(self.notebook.GetPageCount()))
         return [page for page in pages if isinstance(page, SessionPanel)]
 
@@ -1338,7 +1338,7 @@ class MainFrame(wx.Frame):
         initial_prompt: str = "",
         session_title: str = "",
         open_main_chat: bool = True,
-    ) -> "SessionPanel":
+    ) -> SessionPanel:
         panel = SessionPanel(
             self.notebook,
             cwd,
@@ -2088,11 +2088,11 @@ class MainFrame(wx.Frame):
 
     def _load_agent_files(
         self,
-        cwd: Optional[str],
-        page: Optional[wx.Window],
+        cwd: str | None,
+        page: wx.Window | None,
         group_at: int,
-        open_group: Optional[tuple[str, str]] = None,
-        selected_key: Optional[str] = None,
+        open_group: tuple[str, str] | None = None,
+        selected_key: str | None = None,
     ) -> None:
         """Discover agent files off the GUI thread, then show the current request."""
         self._agent_files_serial += 1
@@ -2124,11 +2124,11 @@ class MainFrame(wx.Frame):
     def _agent_files_loaded(
         self,
         serial: int,
-        cwd: Optional[str],
-        page: Optional[wx.Window],
+        cwd: str | None,
+        page: wx.Window | None,
         group_at: int,
-        open_group: Optional[tuple[str, str]],
-        selected_key: Optional[str],
+        open_group: tuple[str, str] | None,
+        selected_key: str | None,
         groups: list[AgentFiles],
         error: str,
     ) -> None:
@@ -2148,20 +2148,20 @@ class MainFrame(wx.Frame):
         self._set_status_text("What Agents Know is ready")
         self._show_agent_files(cwd, page, serial, groups, group_at, open_group, selected_key)
 
-    def _restore_agent_files_focus(self, page: Optional[wx.Window]) -> None:
+    def _restore_agent_files_focus(self, page: wx.Window | None) -> None:
         focus = getattr(self, "_agent_files_return_focus", None)
         if self.notebook.GetCurrentPage() is page and focus and focus.IsShownOnScreen():
             focus.SetFocus()
 
     def _show_agent_files(
         self,
-        cwd: Optional[str],
-        page: Optional[wx.Window],
+        cwd: str | None,
+        page: wx.Window | None,
         serial: int,
         groups: list[AgentFiles],
         group_at: int,
-        open_group: Optional[tuple[str, str]] = None,
-        selected_key: Optional[str] = None,
+        open_group: tuple[str, str] | None = None,
+        selected_key: str | None = None,
     ) -> None:
         if open_group:
             selected_group_at = next(
@@ -2211,11 +2211,11 @@ class MainFrame(wx.Frame):
 
     def _agent_files_of(
         self,
-        cwd: Optional[str],
-        page: Optional[wx.Window],
+        cwd: str | None,
+        page: wx.Window | None,
         groups: list[AgentFiles],
         group_at: int,
-        selected_key: Optional[str] = None,
+        selected_key: str | None = None,
     ) -> bool:
         add_labels = {
             "memory": "&Add Memory…",
@@ -2291,7 +2291,7 @@ class MainFrame(wx.Frame):
             else:
                 return False
 
-    def _add_entry(self, cwd: Optional[str], group: AgentFiles) -> Optional[str]:
+    def _add_entry(self, cwd: str | None, group: AgentFiles) -> str | None:
         """Ask for a new entry and save it; its key, or None."""
         if group.editable == "memory":
             return self._add_memory(cwd)
@@ -2345,7 +2345,7 @@ class MainFrame(wx.Frame):
                 return f"{path}\n{at}"
         return None
 
-    def _add_memory(self, cwd: Optional[str]) -> Optional[str]:
+    def _add_memory(self, cwd: str | None) -> str | None:
         """Ask for a new memory and save it; the path saved, or None."""
         folders = memory_folders(cwd)
         if not folders:
@@ -3082,12 +3082,12 @@ class MainFrame(wx.Frame):
         else:
             wx.CallAfter(announce, f"Sent to {self._relay_speaker(target)}")
 
-    def _relay_speaker(self, panel: "SessionPanel") -> str:
+    def _relay_speaker(self, panel: SessionPanel) -> str:
         """'Codex (my-project)': who a relayed reply came from."""
         name = _tab_label(getattr(panel, "tab_title", ""), panel.cwd)
         return f"{backend_label(panel.selected_backend())} ({name})"
 
-    def _relay_answer(self, panel: "SessionPanel", answer: Optional[str]) -> None:
+    def _relay_answer(self, panel: SessionPanel, answer: str | None) -> None:
         """One tab in the agent conversation finished a turn: pass it on, or stop."""
         relay = getattr(self, "_relay", None)
         if not relay or panel not in relay["tabs"]:
@@ -3162,7 +3162,7 @@ class MainFrame(wx.Frame):
             f"{self._relay_speaker(other)}"
         )
 
-    def _relay_preface(self, relay: dict, panel: "SessionPanel") -> str:
+    def _relay_preface(self, relay: dict, panel: SessionPanel) -> str:
         """The setup an agent is told before its first message, once; "" after that."""
         told = relay.get("told")
         if told is None or id(panel) in told:
@@ -3233,7 +3233,7 @@ class MainFrame(wx.Frame):
                 f"{backend_label(self._backend)} cannot compact. Start a new conversation instead."
             )
 
-    def _set_projects_folder(self) -> Optional[str]:
+    def _set_projects_folder(self) -> str | None:
         """Choose and remember the parent folder that holds the projects."""
         with wx.DirDialog(
             self,
@@ -3379,7 +3379,7 @@ class MainFrame(wx.Frame):
             return
         focused = wx.Window.FindFocus()
 
-        def within(window: Optional[wx.Window]) -> bool:
+        def within(window: wx.Window | None) -> bool:
             node = focused
             while node is not None:
                 if node is window:
@@ -3454,7 +3454,7 @@ class MainFrame(wx.Frame):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _desktop_shortcut_finished(self, serial: int, link: Optional[str], error: str) -> None:
+    def _desktop_shortcut_finished(self, serial: int, link: str | None, error: str) -> None:
         if not self or serial != self._desktop_shortcut_serial:
             return
         self._desktop_shortcut_running = False
@@ -3549,7 +3549,7 @@ class MainFrame(wx.Frame):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _open_linked(self, serial: int, entry: Optional[HistoryEntry]) -> None:
+    def _open_linked(self, serial: int, entry: HistoryEntry | None) -> None:
         if not self or serial != getattr(self, "_linked_lookup_serial", 0):
             return
         if entry is None:

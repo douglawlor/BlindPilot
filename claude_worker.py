@@ -20,7 +20,7 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import backend_pool
 import claude_session
@@ -182,8 +182,8 @@ class ClaudeWorker(threading.Thread):
 
     def __init__(
         self,
-        prompt: Optional[str],
-        session_id: Optional[str],
+        prompt: str | None,
+        session_id: str | None,
         cwd: str,
         permission_mode: str,
         *,
@@ -195,12 +195,12 @@ class ClaudeWorker(threading.Thread):
         on_complete: Callable[[str], None],
         on_failed: Callable[[str], None],
         on_done: Callable[[], None],
-        on_question: Optional[AskQuestions] = None,
-        on_subagent: Optional[SubagentReport] = None,
+        on_question: AskQuestions | None = None,
+        on_subagent: SubagentReport | None = None,
         held_for: object = None,
-        on_unsolicited: Optional[Callable[[], None]] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
-        remote_control: Optional[dict] = None,
+        on_unsolicited: Callable[[], None] | None = None,
+        on_permission: Callable[[str, dict, list], dict] | None = None,
+        remote_control: dict | None = None,
     ):
         super().__init__(daemon=True)
         # {"enabled", "name", "reattach"}: Remote Control as the tab wants it.
@@ -226,14 +226,14 @@ class ClaudeWorker(threading.Thread):
         # CLI speaks with no turn attached.
         self._held_for = held_for
         self._on_unsolicited = on_unsolicited
-        self._session: Optional[claude_session.ClaudeSession] = None
+        self._session: claude_session.ClaudeSession | None = None
         # The queue this turn is reading, kept so Stop can wake a reader that
         # is parked on it.
-        self._events: Optional[queue.Queue] = None
+        self._events: queue.Queue | None = None
         self._cancelled = False
         # When the drain that follows Stop runs out. Set by `cancel`, so the
         # budget is counted from Stop rather than from the last event.
-        self._cancel_deadline: Optional[float] = None
+        self._cancel_deadline: float | None = None
         # Set once the session is up and the opening prompt has gone in, cleared
         # when the turn ends. Guards `steer()` against writing to a session that
         # is not there yet (or is already gone).
@@ -630,8 +630,8 @@ class ClaudeWorker(threading.Thread):
             self._accepting_input.clear()
 
     def _take(
-        self, wants: "claude_session.Wants", binary: str
-    ) -> Optional["claude_session.ClaudeSession"]:
+        self, wants: claude_session.Wants, binary: str
+    ) -> claude_session.ClaudeSession | None:
         """The tab's process for this turn, or None once it has been accounted for."""
         try:
             session = claude_session.take_or_start(
@@ -688,7 +688,7 @@ class ClaudeWorker(threading.Thread):
             report(body if isinstance(body, dict) else {})
 
     def _read_turn(
-        self, session: claude_session.ClaudeSession, events: "queue.Queue", mark: int
+        self, session: claude_session.ClaudeSession, events: queue.Queue, mark: int
     ) -> None:
         if self._cancelled:
             # Stop landed before there was a process to stop. Sending the
@@ -721,7 +721,7 @@ class ClaudeWorker(threading.Thread):
         partial_live: dict[str, SentenceStreamer] = {}
 
         while True:
-            timeout: Optional[float] = None
+            timeout: float | None = None
             if self._cancelled:
                 # After Stop, the CLI's result for the interrupted turn is due
                 # at once; a process that keeps it is not trusted with the

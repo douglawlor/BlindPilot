@@ -52,7 +52,8 @@ import atexit
 import threading
 import time
 import weakref
-from typing import Callable, NamedTuple, Optional
+from typing import NamedTuple
+from collections.abc import Callable
 
 
 # How long a held process may sit unused before it is stopped. Long enough
@@ -223,7 +224,7 @@ class BackendPool:
         # without a teardown cannot pin its process for the life of the app.
         # This is a backstop, not the mechanism: collection is not prompt, so
         # the enumerated drop sites remain the contract.
-        self._per_panel: "weakref.WeakKeyDictionary[object, dict[tuple, HeldProcess]]" = (
+        self._per_panel: weakref.WeakKeyDictionary[object, dict[tuple, HeldProcess]] = (
             weakref.WeakKeyDictionary()
         )
         self._stopping: set[threading.Thread] = set()
@@ -240,16 +241,16 @@ class BackendPool:
         # Told the backend name of each process let go, and why, so the
         # window can say what the next prompt in that tab is waiting for. Set
         # by the window; the pool itself must not import wx or speak.
-        self.on_reap: Optional[Callable[[str, str], None]] = None
+        self.on_reap: Callable[[str, str], None] | None = None
 
-    def _slot(self, key: tuple) -> Optional[dict]:
+    def _slot(self, key: tuple) -> dict | None:
         """The dict this key lives in, or None if nothing is held for it."""
         panel = key[1]
         if panel is _SHARED:
             return self._shared
         return self._per_panel.get(panel)
 
-    def take(self, key: tuple) -> Optional[HeldProcess]:
+    def take(self, key: tuple) -> HeldProcess | None:
         """The process for this key if it can still serve a turn, else None.
 
         A process found dead is discarded here rather than handed on, so the
@@ -296,7 +297,7 @@ class BackendPool:
         # being typed.
         held.touch()
         name = _filed_as(key)
-        stale: Optional[HeldProcess] = None
+        stale: HeldProcess | None = None
         with self._lock:
             if panel is _SHARED:
                 slot = self._shared
@@ -566,7 +567,7 @@ class BackendPool:
         return gone
 
 
-_pool: Optional[BackendPool] = None
+_pool: BackendPool | None = None
 _POOL_LOCK = threading.Lock()
 
 
@@ -579,7 +580,7 @@ def pool() -> BackendPool:
         return _pool
 
 
-_reaper: Optional[threading.Thread] = None
+_reaper: threading.Thread | None = None
 _reaper_stop = threading.Event()
 
 

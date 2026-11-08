@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import platform
-from typing import Optional
 
 import wx
 
@@ -57,7 +56,7 @@ class FormattedView(wx.Dialog):
     """
 
     @classmethod
-    def open(cls, parent: wx.Window, page: str, title: str) -> Optional["FormattedView"]:
+    def open(cls, parent: wx.Window, page: str, title: str) -> FormattedView | None:
         """The view, or None when this machine has no usable web view."""
         try:
             import wx.html2 as html2

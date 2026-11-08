@@ -22,7 +22,7 @@ import subprocess
 import threading
 import time
 import urllib.parse
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from agent_backends import BACKENDS, normalize_backend, subprocess_env
 from connect_dialog import _open_web_page
@@ -100,8 +100,8 @@ class BackendLogin:
         binary: str,
         *,
         timeout: float = 300.0,
-        opener: Optional[Callable[[str], bool]] = None,
-        popen: Optional[Callable[..., "subprocess.Popen"]] = None,
+        opener: Callable[[str], bool] | None = None,
+        popen: Callable[..., subprocess.Popen] | None = None,
     ):
         self.backend = normalize_backend(backend)
         self.binary = binary
@@ -114,7 +114,7 @@ class BackendLogin:
         # of, and this leaves one place in the file that opens anything.
         self._opener = opener or _open_web_page
         self._popen = popen or subprocess.Popen
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: subprocess.Popen | None = None
         self._writing = threading.Lock()
 
     # ---- Driving it ----

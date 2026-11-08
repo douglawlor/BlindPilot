@@ -16,7 +16,7 @@ else goes before anything is sent.
 from __future__ import annotations
 
 import urllib.parse
-from typing import Callable
+from collections.abc import Callable
 
 import wx
 

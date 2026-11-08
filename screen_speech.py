@@ -31,7 +31,6 @@ import platform
 import queue
 import threading
 import time
-from typing import Optional
 
 import wx
 
@@ -83,7 +82,7 @@ _SPEAKER_INITIALIZED = False
 # calls on one daemon worker so GUI callbacks only enqueue narration.
 _ANNOUNCEMENT_QUEUE: queue.Queue[str] = queue.Queue()
 _ANNOUNCEMENT_LOCK = threading.RLock()
-_ANNOUNCEMENT_WORKER: Optional[threading.Thread] = None
+_ANNOUNCEMENT_WORKER: threading.Thread | None = None
 
 # What `announce` said last, for Repeat Last Announcement. A line spoken while
 # the reader was busy, or cut off by a keystroke, is otherwise gone for good.

@@ -1770,7 +1770,7 @@ class _StderrPipe:
     """A stderr the test writes to and the server's own reader thread reads."""
 
     def __init__(self) -> None:
-        self._lines: "queue.Queue[str | None]" = queue.Queue()
+        self._lines: queue.Queue[str | None] = queue.Queue()
 
     def say(self, line: str) -> None:
         self._lines.put(line + "\n")
@@ -1778,7 +1778,7 @@ class _StderrPipe:
     def close(self) -> None:
         self._lines.put(None)
 
-    def __iter__(self) -> "_StderrPipe":
+    def __iter__(self) -> _StderrPipe:
         return self
 
     def __next__(self) -> str:

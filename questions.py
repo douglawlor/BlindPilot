@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence
+from collections.abc import Callable, Sequence
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class Question:
 # option labels the person picked, or the text they typed instead — or None if
 # they closed the dialog without answering. Called on the worker thread, and
 # blocks it: the backend's turn is waiting on this answer.
-AskQuestions = Callable[[Sequence[Question]], Optional[list[list[str]]]]
+AskQuestions = Callable[[Sequence[Question]], list[list[str]] | None]
 
 
 # How much a turn may say after its last question mark before it counts as
@@ -238,7 +238,7 @@ def questions_written_in_the_answer(text: str) -> tuple[Question, ...]:
     return ()
 
 
-def question_summary(questions: Sequence[Question], answers: Optional[list[list[str]]]) -> str:
+def question_summary(questions: Sequence[Question], answers: list[list[str]] | None) -> str:
     """One row for the transcript saying what was asked and what was said.
 
     Both halves are kept: read back later, a bare "Spaces" says nothing, and

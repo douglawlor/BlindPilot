@@ -12,7 +12,7 @@ import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 import wx
 

@@ -14,7 +14,7 @@ stay editable. Escape cancels, and focus starts in the target list.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import wx
 
@@ -119,10 +119,10 @@ class SendToTabDialog(wx.Dialog):
         self.target.SetFocus()
         self.CentreOnParent()
 
-    def _on_relay_toggle(self, _event: Optional[wx.CommandEvent] = None) -> None:
+    def _on_relay_toggle(self, _event: wx.CommandEvent | None = None) -> None:
         self.manual.Enable(self.relay.IsChecked())
 
-    def _on_kind(self, _event: Optional[wx.CommandEvent] = None) -> None:
+    def _on_kind(self, _event: wx.CommandEvent | None = None) -> None:
         _name, first, second = RELAY_KINDS[max(0, self.kind.GetSelection())]
         self.first_role.SetValue(first)
         self.second_role.SetValue(second)

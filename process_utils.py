@@ -12,7 +12,6 @@ import os
 import platform
 import signal
 import subprocess
-from typing import Optional
 
 
 # A windowed app owns no console, so every child process Windows considers a
@@ -220,7 +219,7 @@ def _descendant_pids(roots: set[int]) -> set[int]:
     return family
 
 
-def hide_console_windows(roots: Optional[set[int]] = None) -> int:
+def hide_console_windows(roots: set[int] | None = None) -> int:
     """Hide the console this process was given, and any its children raise.
 
     Creating the pseudo-terminal attaches a console to BlindPilot itself, which
@@ -284,7 +283,7 @@ def hide_console_windows(roots: Optional[set[int]] = None) -> int:
     return hidden
 
 
-def _git(cwd: str, *args: str) -> "subprocess.CompletedProcess[str]":
+def _git(cwd: str, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", cwd, *args],
         capture_output=True,

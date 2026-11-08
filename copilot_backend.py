@@ -50,7 +50,6 @@ import subprocess
 import threading
 import uuid
 from pathlib import Path
-from typing import Optional
 
 import agent_backends
 from owned_process import owned_popen
@@ -245,10 +244,10 @@ class CopilotWorker(_TurnWorker):
         super().__init__(*args, **kwargs)
 
     def _setup(self) -> None:
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: subprocess.Popen | None = None
         self._error_lines: list[str] = []
         self._error_lock = threading.Lock()
-        self._stderr_thread: Optional[threading.Thread] = None
+        self._stderr_thread: threading.Thread | None = None
         self._parts: list[str] = []
         self._streamer = SentenceStreamer(lambda text: self._on_activity("assistant", text))
         # Not _started: threading.Thread owns that name for its own Event,
@@ -481,7 +480,7 @@ class CopilotWorker(_TurnWorker):
         self._on_complete("".join(self._parts).strip() or "Finished with nothing to say.")
 
     def _finish(self, proc: subprocess.Popen) -> None:
-        code: Optional[int] = None
+        code: int | None = None
         try:
             code = proc.wait(timeout=10)
         except (OSError, subprocess.TimeoutExpired):

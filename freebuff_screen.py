@@ -23,7 +23,7 @@ reads this module, and this module reads pyte only once a terminal exists.
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any
 
 import pyte
 
@@ -32,7 +32,7 @@ class _RepairedScreen(pyte.HistoryScreen):
     """A ``HistoryScreen`` that can always be read, orphaned stubs and all."""
 
     @property
-    def display(self) -> List[str]:
+    def display(self) -> list[str]:
         # The stub cell only ever reads back as a blank, so replacing the
         # empty data in place changes nothing pyte itself would have drawn.
         for line in self.buffer.values():

@@ -1150,7 +1150,7 @@ class _Ok:
     def __init__(self, body: bytes) -> None:
         self._body = body
 
-    def __enter__(self) -> "_Ok":
+    def __enter__(self) -> _Ok:
         return self
 
     def __exit__(self, *exc) -> bool:

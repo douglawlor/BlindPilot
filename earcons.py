@@ -22,7 +22,6 @@ import threading
 import time
 import wave
 from pathlib import Path
-from typing import Optional
 
 from agent_backends import BACKEND_PITCH_ORDER
 from app_config import CUE_OFF, CUE_PERIODIC, CUE_SECONDS_MIN, SETTINGS
@@ -60,7 +59,7 @@ class Earcons:
     re-spawning in a daemon thread. Missing files are silently ignored.
     """
 
-    def __init__(self, folder: str, enabled: bool = True, cues: Optional[dict] = None):
+    def __init__(self, folder: str, enabled: bool = True, cues: dict | None = None):
         self._folder = folder
         self._system = platform.system()
         self.enabled = bool(enabled)
@@ -71,8 +70,8 @@ class Earcons:
         self.received = self._resolve("received", "Recieved")
         self.in_progress = self._resolve("in-progress", "in_progress")
         self._loop_stop = threading.Event()
-        self._loop_thread: Optional[threading.Thread] = None
-        self._loop_proc: Optional[subprocess.Popen] = None
+        self._loop_thread: threading.Thread | None = None
+        self._loop_proc: subprocess.Popen | None = None
         # Whether a progress cue of ours has been started and not yet stopped.
         # It matters because the Windows sound API is stopped by purging every
         # sound this process started, which would also cut a one-shot that had
@@ -84,9 +83,9 @@ class Earcons:
         # into a failed build.
         self._reaping: list[subprocess.Popen] = []
         self.per_backend_send = False
-        self._send_variants: dict[str, Optional[str]] = {}
+        self._send_variants: dict[str, str | None] = {}
 
-    def _resolve(self, *basenames: str) -> Optional[str]:
+    def _resolve(self, *basenames: str) -> str | None:
         for name in basenames:
             for ext in (".wav", ".ogg", ".aiff", ".aif", ".mp3"):
                 path = os.path.join(self._folder, name + ext)
@@ -94,7 +93,7 @@ class Earcons:
                     return path
         return None
 
-    def _unix_player(self) -> Optional[list]:
+    def _unix_player(self) -> list | None:
         if self._system == "Darwin":
             return ["afplay"]
         for player in ("paplay", "aplay", "ffplay"):
@@ -103,7 +102,7 @@ class Earcons:
                 return [found] + (["-nodisp", "-autoexit"] if player == "ffplay" else [])
         return None
 
-    def _play_once(self, path: Optional[str]) -> None:
+    def _play_once(self, path: str | None) -> None:
         if not self.enabled or not path:
             return
         try:
@@ -164,7 +163,7 @@ class Earcons:
                 path = self._send_for(backend)
             self._play_once(path)
 
-    def _send_for(self, backend: str) -> Optional[str]:
+    def _send_for(self, backend: str) -> str | None:
         if backend not in self._send_variants:
             # Keyed on the fixed order backends were added in, not the
             # alphabetical menu order, so each backend keeps its pitch.

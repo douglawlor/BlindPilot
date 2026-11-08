@@ -22,7 +22,8 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any
+from collections.abc import Callable
 
 import wx
 
@@ -158,8 +159,8 @@ class SetupWizard(wx.Dialog):
 
     def __init__(
         self,
-        parent: Optional[wx.Window],
-        initial_projects_folder: Optional[str] = None,
+        parent: wx.Window | None,
+        initial_projects_folder: str | None = None,
         initial_backend: str = BACKEND_CLAUDE,
     ):
         super().__init__(
@@ -170,19 +171,19 @@ class SetupWizard(wx.Dialog):
         # Sized before the pages are built, so their text wraps to this width.
         self.SetSize(self.FromDIP(wx.Size(580, 400)))
         self._paragraphs: list[WrappedText] = []
-        self.projects_folder: Optional[str] = initial_projects_folder
+        self.projects_folder: str | None = initial_projects_folder
         self.backend = normalize_backend(initial_backend)
         self._step = 0
-        self._backend_path: Optional[str] = None
+        self._backend_path: str | None = None
         self._update_check_generation = 0
         self._backend_update_service = BackendUpdateService(
             cache_path=blindpilot_data_dir() / "backend-update-cache.json"
         )
-        self._login: Optional[BackendLogin] = None
+        self._login: BackendLogin | None = None
         # A sign-in running in a terminal the user never sees, kept so backing
         # out of the wizard stops it rather than leaving it to finish unseen.
-        self._hidden_login: Optional[object] = None
-        self._code_dialog: Optional[wx.TextEntryDialog] = None
+        self._hidden_login: object | None = None
+        self._code_dialog: wx.TextEntryDialog | None = None
 
         self._step_label = wx.StaticText(self, label="")
         f = self._step_label.GetFont()
@@ -489,11 +490,11 @@ class SetupWizard(wx.Dialog):
         self._refresh_backend_copy()
         self.Layout()
 
-    def _find_selected_cli(self) -> Optional[str]:
+    def _find_selected_cli(self) -> str | None:
         return SetupWizard._find_selected_cli_for_backend(self.backend)
 
     @staticmethod
-    def _find_selected_cli_for_backend(backend: str) -> Optional[str]:
+    def _find_selected_cli_for_backend(backend: str) -> str | None:
         if backend == BACKEND_CLAUDE:
             return _find_claude()
         if backend == BACKEND_MUSE:
@@ -506,11 +507,11 @@ class SetupWizard(wx.Dialog):
             return muse_cli_path()
         return find_backend_cli(backend)
 
-    def _selected_install_argv(self) -> Optional[List[str]]:
+    def _selected_install_argv(self) -> list[str] | None:
         return SetupWizard._selected_install_argv_for_backend(self.backend)
 
     @staticmethod
-    def _selected_install_argv_for_backend(backend: str) -> Optional[List[str]]:
+    def _selected_install_argv_for_backend(backend: str) -> list[str] | None:
         if backend == BACKEND_CLAUDE:
             return _install_argv()
         if backend == BACKEND_HERMES:
@@ -629,9 +630,9 @@ class SetupWizard(wx.Dialog):
     def _check_cli(
         self,
         force_update_check: bool = False,
-        _facts: Optional[tuple[Optional[str], bool, bool, bool]] = None,
-        _generation: Optional[int] = None,
-        _backend: Optional[str] = None,
+        _facts: tuple[str | None, bool, bool, bool] | None = None,
+        _generation: int | None = None,
+        _backend: str | None = None,
     ) -> None:
         if not self:
             # `_show_step` queues these, so one can land an event-loop
@@ -769,7 +770,7 @@ class SetupWizard(wx.Dialog):
         generation: int,
         backend: str,
         force_update_check: bool,
-        facts: Optional[tuple[Optional[str], bool, bool, bool]],
+        facts: tuple[str | None, bool, bool, bool] | None,
         error: str,
     ) -> None:
         if (
@@ -799,10 +800,10 @@ class SetupWizard(wx.Dialog):
         self,
         force_update_check: bool = False,
         *,
-        on_path: Optional[bool] = None,
-        install_available: Optional[bool] = None,
-        npm_available: Optional[bool] = None,
-        backend_path: Optional[str] = None,
+        on_path: bool | None = None,
+        install_available: bool | None = None,
+        npm_available: bool | None = None,
+        backend_path: str | None = None,
         prepared: bool = False,
     ) -> None:
         """Check a non-Claude backend without showing Claude-specific guidance."""
@@ -1024,7 +1025,7 @@ class SetupWizard(wx.Dialog):
             binary = None
         wx.CallAfter(self._on_install_done, binary)
 
-    def _on_install_done(self, binary: Optional[str]) -> None:
+    def _on_install_done(self, binary: str | None) -> None:
         if not self:
             # Installing takes a minute, Cancel and Escape stay live
             # throughout, and nothing tells the install thread to stop.
@@ -1171,7 +1172,7 @@ class SetupWizard(wx.Dialog):
         # On Windows Muse's binary is a bash script inside WSL, which Popen
         # cannot execute, so the argv is rebuilt through the same bridge every
         # other Muse path takes. Elsewhere plain Popen runs it.
-        muse_popen: Optional[Callable[..., subprocess.Popen]] = None
+        muse_popen: Callable[..., subprocess.Popen] | None = None
         muse_argv = (
             muse_command() or []
             if self.backend == BACKEND_MUSE and platform.system() == "Windows"
@@ -1267,7 +1268,7 @@ class SetupWizard(wx.Dialog):
         ok = backend_auth_ok(self.backend)
         wx.CallAfter(self._on_login_done, ok, "")
 
-    def _launch_login_terminal(self, args: List[str]) -> None:
+    def _launch_login_terminal(self, args: list[str]) -> None:
         """Open a real console for a backend whose setup asks questions.
 
         The user answers in that window, not in this one, so there is no exit

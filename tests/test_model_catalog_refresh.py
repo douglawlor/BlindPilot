@@ -51,7 +51,7 @@ class _Panel:
     refresh_models_in_background = app.SessionPanel.refresh_models_in_background
 
 
-def _options(models: list[str], current: str = "") -> "app.ModelOptions":
+def _options(models: list[str], current: str = "") -> app.ModelOptions:
     return app.ModelOptions(list(models), ["high"], current_model=current)
 
 

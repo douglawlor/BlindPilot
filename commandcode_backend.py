@@ -35,7 +35,6 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 import agent_backends
 import process_utils
@@ -78,7 +77,7 @@ def commandcode_config() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def commandcode_credentials() -> Optional[dict]:
+def commandcode_credentials() -> dict | None:
     """The account Command Code stored at sign-in, or None when there is none."""
     try:
         payload = json.loads((commandcode_home() / "auth.json").read_text(encoding="utf-8"))
@@ -87,7 +86,7 @@ def commandcode_credentials() -> Optional[dict]:
     return payload if isinstance(payload, dict) and payload else None
 
 
-def _probe(binary: str, args: list[str], timeout: int) -> tuple[Optional[int], str]:
+def _probe(binary: str, args: list[str], timeout: int) -> tuple[int | None, str]:
     """One short CLI command, through the shared probe the suite can fence."""
     return agent_backends._probe_backend(binary, args, timeout)
 
@@ -169,7 +168,7 @@ def commandcode_account_lines() -> list[str]:
 # --------------------------------------------------------------------------
 
 
-def _settings_layer_paths(cwd: Optional[str]) -> list[Path]:
+def _settings_layer_paths(cwd: str | None) -> list[Path]:
     """The layers Command Code merges permission rules from, in its own order.
 
     Measured at 1.54.0: the person's own settings, then the project's, then the
@@ -200,7 +199,7 @@ def _rule_count(block: dict, key: str) -> int:
     return len(rules) if isinstance(rules, list) else 0
 
 
-def commandcode_bypass_limits(cwd: Optional[str] = None) -> list[str]:
+def commandcode_bypass_limits(cwd: str | None = None) -> list[str]:
     """What a bypass turn will still be refused, read from the CLI's settings.
 
     "Bypass permissions" does not mean the same thing to Command Code as it
@@ -291,9 +290,9 @@ def _models_from_catalog(text: str) -> list[str]:
 
 
 def commandcode_model_options(
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
     *,
-    cancel_event: Optional[threading.Event] = None,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[list[str], list[str], str, str, str]:
     """The picker's answer: (models, efforts, current model, current effort, error)."""
     binary = agent_backends.find_backend_cli(BACKEND_COMMANDCODE)
@@ -376,7 +375,7 @@ _AGENT_COMMANDS_LOCK = threading.Lock()
 _AGENT_COMMANDS_INFLIGHT: dict[str, threading.Event] = {}
 
 
-def commandcode_agent_commands(cwd: Optional[str], wait: bool = False) -> list[tuple[str, str]]:
+def commandcode_agent_commands(cwd: str | None, wait: bool = False) -> list[tuple[str, str]]:
     """The slash commands Command Code's agent offers in `cwd`, as (/name, description).
 
     Asking costs a Command Code start-up, so the answer is cached per folder
@@ -441,7 +440,7 @@ def _fetch_agent_commands(cwd: str) -> list[tuple[str, str]]:
         )
     except (OSError, ValueError):
         return []
-    lines: "queue.Queue[str]" = queue.Queue()
+    lines: queue.Queue[str] = queue.Queue()
 
     def pump() -> None:
         try:
@@ -464,7 +463,7 @@ def _fetch_agent_commands(cwd: str) -> list[tuple[str, str]]:
         except (OSError, ValueError, AssertionError):
             pass
 
-    commands: Optional[list[tuple[str, str]]] = None
+    commands: list[tuple[str, str]] | None = None
     session = ""
     send(1, "initialize", {"protocolVersion": 1, "clientCapabilities": {}})
     send(2, "session/new", {"cwd": cwd or str(Path.home()), "mcpServers": []})

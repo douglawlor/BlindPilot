@@ -1730,7 +1730,7 @@ def test_a_binary_tool_result_is_decoded_from_base64(monkeypatch):
             "jsonrpc": "2.0",
             "id": 104,
             "result": {
-                "content": _base64.b64encode("café".encode("utf-8")).decode("ascii"),
+                "content": _base64.b64encode("café".encode()).decode("ascii"),
                 "encoding": "base64",
                 "eof": True,
                 "byteLen": 5,

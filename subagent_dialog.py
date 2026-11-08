@@ -14,7 +14,6 @@ the log. Escape is Close, and focus starts in the log.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
 
 import wx
 
@@ -27,7 +26,7 @@ PAD = 8
 class SubagentEntry:
     name: str
     status: str
-    lines: List[str] = field(default_factory=list)
+    lines: list[str] = field(default_factory=list)
 
     def label(self) -> str:
         """The list row: name, state, and the last thing it did."""
