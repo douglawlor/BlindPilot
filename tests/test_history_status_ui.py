@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import wx
 
 import blindpilot_app as app
+import conversation_webview  # noqa: E402
 import history_dialog  # noqa: E402
 from doubles import KeyEvent
 from session_history import HistoryEntry, HistoryTurn
@@ -92,7 +93,7 @@ def test_enter_in_source_status_does_not_open_a_conversation(monkeypatch):
 def test_partial_conversation_keeps_text_and_announces_warning(frame, monkeypatch):
     monkeypatch.setattr(app.ConversationWebViewPanel, "_load_conversation", lambda _s: None)
     spoken = []
-    monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
+    monkeypatch.setattr(conversation_webview, "announce", lambda text, **_k: spoken.append(text))
     entry = HistoryEntry("claude", "partial", "Partial conversation", "", 1)
     dialog = _reading_panel(frame, entry, entry.title)
     displayed = []

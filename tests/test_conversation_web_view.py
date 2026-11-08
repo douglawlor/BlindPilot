@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import blindpilot_app as app
+import conversation_webview  # noqa: E402
 import history_dialog  # noqa: E402
 from session_history import HistoryEntry, HistoryTurn
 
@@ -211,7 +212,9 @@ def test_focus_moves_into_the_conversation(frame):
 def test_a_conversation_that_cannot_be_read_says_so(frame, monkeypatch):
     """A store that cannot be read is an error said out loud, not a blank page."""
     said: list[str] = []
-    monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(
+        conversation_webview, "announce", lambda text, urgent=False: said.append(text)
+    )
     dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         dialog._show_conversation([], "This conversation could not be read.")
@@ -230,7 +233,9 @@ def test_a_conversation_closed_before_it_loads_says_nothing(frame, monkeypatch):
     of whatever the person is doing next.
     """
     said: list[str] = []
-    monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(
+        conversation_webview, "announce", lambda text, urgent=False: said.append(text)
+    )
     dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         dialog.Destroy()
@@ -244,7 +249,9 @@ def test_a_conversation_closed_before_it_loads_says_nothing(frame, monkeypatch):
 def test_a_conversation_with_no_messages_says_which_one_is_missing(frame, monkeypatch):
     """A Hermes conversation on another machine cannot be shown, and says so."""
     said: list[str] = []
-    monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(
+        conversation_webview, "announce", lambda text, urgent=False: said.append(text)
+    )
     missing = "This conversation is not stored on this computer, so it cannot be shown here."
     dialog = _reading_panel(frame, _entry(), "A conversation", missing=missing)
     try:
@@ -264,7 +271,9 @@ def test_without_a_browser_the_conversation_is_still_readable(frame, monkeypatch
 
     monkeypatch.setattr(html2.WebView, "New", unavailable)
     said: list[str] = []
-    monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(
+        conversation_webview, "announce", lambda text, urgent=False: said.append(text)
+    )
     dialog = _reading_panel(frame, _entry(), "A conversation")
     try:
         assert not dialog._webview.using_webview

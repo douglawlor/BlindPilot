@@ -127,6 +127,7 @@ def test_selecting_a_failed_reader_preserves_and_announces_its_error(window, ent
     page._show_conversation([], "This conversation could not be read.")
     spoken = []
     monkeypatch.setattr(app, "announce", spoken.append)
+    monkeypatch.setattr(conversation_webview, "announce", spoken.append)
     monkeypatch.setattr(type(window), "_focus_is_within", staticmethod(lambda *_a: False))
     window._jump_to_tab(1)
     wx.Yield()

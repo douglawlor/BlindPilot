@@ -29,7 +29,6 @@ terminal sessions in different project folders.
 
 from __future__ import annotations
 
-import html
 import json
 import logging
 import os
@@ -168,6 +167,7 @@ from connect_dialog import ConnectDialog, _open_web_page  # noqa: F401
 from agent_file_list import AgentFileList  # noqa: F401
 from earcons import Earcons, _faster_wav  # noqa: F401
 from backend_login import _LOOPBACK_PROGRESS, BackendLogin, _first_login_url, _login_speech  # noqa: F401
+from conversation_webview import ConversationWebViewPanel, Turn  # noqa: F401
 from history_dialog import (  # noqa: F401
     _HISTORY_ANY_BACKEND,
     _HISTORY_ANY_GROUP,
@@ -249,7 +249,6 @@ from claude_worker import (  # noqa: F401
 from question_dialog import QuestionDialog
 from conversation_list import make_conversation_list
 from conversation_items import ConversationItem, ConversationItemsDialog, collect_items
-from history_status import history_diagnostics
 import remote_sessions
 from task_list import TaskList
 from app_updater import (
@@ -317,7 +316,6 @@ from muse_backend import (
 
 from markdown_rows import (
     Row,
-    _MD_CONVERSATION,
     _last_block_start,
     _one_line,
     _row_at,
@@ -1910,12 +1908,6 @@ def question_left_in_the_answer(text: str, *, asked_properly: bool, replaying: b
     return question
 
 
-@dataclass
-class Turn:
-    prompt: str
-    response: str = ""
-
-
 def _speech_route() -> str:
     """How announcements reach a screen reader here, for a bug report."""
     if platform.system() == "Darwin":
@@ -1981,263 +1973,6 @@ def _show_conversation_items(parent: wx.Window, messages: list[tuple[str, str]],
         dialog.Destroy()
         if focused and not focused.IsBeingDeleted():
             focused.SetFocus()
-
-
-class ConversationWebViewPanel(wx.Panel):
-    """A read-only conversation in a tab of the main window.
-
-    Uses a modern native browser to render the conversation
-    as HTML so it reads correctly in NVDA and JAWS. The conversation is
-    loaded from the backend's transcript and rendered with Markdown.
-
-    Where the machine has no modern web view backend, the conversation is
-    shown as plain text in a read-only box
-    rather than not being shown at all.
-    """
-
-    def __init__(
-        self,
-        parent: wx.Window,
-        entry: HistoryEntry,
-        title: str,
-        missing: str = "No messages found in this conversation.",
-        *,
-        on_close: Callable[["ConversationWebViewPanel"], None],
-        on_command: Optional[Callable[[str], None]] = None,
-    ):
-        super().__init__(parent, name=f"Read: {title}")
-
-        self._entry = entry
-        self._title = title
-        self._missing = missing
-        self._on_close = on_close
-        self._on_command = on_command
-        self.return_to: Optional[wx.Window] = None
-        self.last_status = "Loading conversation"
-        # The browser adapter is imported only when a conversation is opened.
-        self._webview: Optional[Any] = None
-        self._text: Optional[wx.TextCtrl] = None
-        # Set when the window is closed, so a load that was already on its way
-        # does not speak for a window that is no longer there.
-        self._closed = False
-
-        view = self._build_view()
-
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(view, 1, wx.EXPAND | wx.ALL, self.FromDIP(PAD_DIALOG))
-
-        self.source_status = wx.TextCtrl(
-            self, style=wx.TE_MULTILINE | wx.TE_READONLY, name="History source status"
-        )
-        self.source_status.SetMinSize(self.FromDIP(wx.Size(560, 85)))
-        self.source_status.Hide()
-        sizer.Add(self.source_status, 0, wx.EXPAND | wx.ALL, self.FromDIP(PAD_DIALOG))
-
-        buttons = wx.BoxSizer(wx.HORIZONTAL)
-        close_button = wx.Button(self, wx.ID_CANCEL, "Close")
-        buttons.Add(close_button, 0, wx.LEFT, self.FromDIP(8))
-        sizer.Add(buttons, 0, wx.ALIGN_RIGHT | wx.ALL, self.FromDIP(PAD_DIALOG))
-
-        self.SetSizer(sizer)
-
-        self.Bind(wx.EVT_BUTTON, lambda _e: self._close(), id=wx.ID_CANCEL)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
-        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
-
-        _call_after_alive(self._load_conversation)
-
-    def _build_view(self) -> wx.Window:
-        """Build a modern browser or its readable native text fallback."""
-        from conversation_webview import ConversationWebView
-
-        self._webview = ConversationWebView(
-            self,
-            title=self._title,
-            on_close=self._close,
-            can_focus=self._can_focus,
-            on_command=self._on_command,
-        )
-        control = self._webview.control
-        # The tab already says which conversation this is. The
-        # control inside it is named for what it is, so the title is not said
-        # three times over.
-        control.SetName("Conversation")
-        return control
-
-    def _is_active(self) -> bool:
-        if self._closed or not self:
-            return False
-        book = self.GetParent()
-        return not isinstance(book, wx.BookCtrlBase) or (
-            book.IsShown() and book.GetCurrentPage() is self
-        )
-
-    def _can_focus(self) -> bool:
-        if not self._is_active():
-            return False
-        frame = wx.GetTopLevelParent(self)
-        strip = getattr(frame, "tab_switcher", None)
-        return not (
-            getattr(frame, "_strip_keeps_focus", False)
-            or (strip is not None and MainFrame._focus_is_within(wx.Window.FindFocus(), strip))
-        )
-
-    def focus_content(self, *, from_navigation: bool = False) -> None:
-        if from_navigation and self._is_active() and self._webview is not None:
-            self._webview.control.SetFocus()
-        if self._can_focus() and self._webview is not None:
-            self._webview.focus()
-
-    def _say_status(self, text: str) -> None:
-        self.last_status = text
-        if self._is_active():
-            frame = wx.GetTopLevelParent(self)
-            status = getattr(frame, "_set_status_text", None)
-            if status is not None:
-                status(text)
-            announce(text)
-
-    def _announce_selected(self, index: int, count: int) -> None:
-        if self._is_active():
-            announce(f"Reading: {self._title}, tab {index + 1} of {count}. {self.last_status}")
-
-    def _load_conversation(self) -> None:
-        """Read the conversation off the GUI thread, then show it.
-
-        A transcript can be tens of megabytes, and reading one on the GUI
-        thread freezes the modal loop, and the screen reader with it.
-        """
-        if self._closed or not self:
-            # The window was closed before the load began. Saying "Loading
-            # conversation" now would be the last thing a window nobody can
-            # reach has to say.
-            return
-        self._say_status("Loading conversation")
-
-        def work() -> None:
-            try:
-                with history_diagnostics() as issues:
-                    turns = load_turns(self._entry)
-                error = "\n".join(issue.message for issue in issues)
-            except Exception:  # noqa: BLE001 - a store that cannot be read
-                turns, error = [], "This conversation could not be read."
-                logging.getLogger("blindpilot").warning(
-                    "could not read a conversation", exc_info=True
-                )
-            _call_after_alive(self._show_conversation, turns, error)
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _show_conversation(self, turns: List[HistoryTurn], error: str) -> None:
-        if self._closed or not self:
-            return
-        self.source_status.ChangeValue(error)
-        self.source_status.Show(bool(error))
-        self.Layout()
-        if error:
-            if not turns:
-                self._show_text(error)
-                self._say_status(f"Error: {error}")
-                return
-        if not turns:
-            self._show_text(self._missing)
-            self._say_status(self._missing)
-            return
-        messages = sum(1 for turn in turns for part in (turn.prompt, turn.response) if part.strip())
-        view = self._webview if self._webview is not None and self._webview.using_webview else None
-        if view is not None:
-            view.set_content(self._conversation_html(turns))
-        else:
-            self._show_text(self._conversation_text(turns))
-        self._say_status(
-            f"Conversation loaded: {messages} messages." + (f" {error}" if error else "")
-        )
-        if view is not None:
-            # The focus call is what puts the reading cursor in the
-            # conversation. The native control taking focus is not enough:
-            # without it the reader is left with a dialog and nothing in it.
-            self.focus_content()
-
-    def _conversation_html(self, turns: List[HistoryTurn]) -> str:
-        """The conversation as a document fragment.
-
-        The title is the one heading of level one, so the reader can get to
-        the conversation by heading. Each exchange is a level two heading
-        under it, numbered, so two exchanges that began alike can be told
-        apart in a list of headings.
-        """
-        parts = [f"<h1>{html.escape(self._title)}</h1>"]
-        speaker = html.escape(backend_label(self._entry.backend))
-        for number, turn in enumerate(turns, start=1):
-            if turn.prompt.strip():
-                parts.append(
-                    f"<article><h2>You, exchange {number}</h2>"
-                    f"{_MD_CONVERSATION.render(turn.prompt)}</article>"
-                )
-            if turn.response.strip():
-                parts.append(
-                    f"<article><h2>{speaker}, exchange {number}</h2>"
-                    f"{_MD_CONVERSATION.render(turn.response)}</article>"
-                )
-        return "\n".join(parts)
-
-    def _conversation_text(self, turns: List[HistoryTurn]) -> str:
-        """The conversation as plain text, for a machine with no web view."""
-        parts: list[str] = []
-        speaker = backend_label(self._entry.backend)
-        for number, turn in enumerate(turns, start=1):
-            if turn.prompt.strip():
-                parts.append(f"You, exchange {number}\n{turn.prompt.strip()}")
-            if turn.response.strip():
-                parts.append(f"{speaker}, exchange {number}\n{turn.response.strip()}")
-        return "\n\n".join(parts)
-
-    def _show_text(self, text: str) -> None:
-        """Show the conversation as plain text, where there is no web view."""
-        control = self._plain_control()
-        if control is None:
-            if self._webview is not None:
-                self._webview.set_content(f"<p>{html.escape(text)}</p>")
-                self.focus_content()
-            return
-        control.SetValue(text)
-        if self._can_focus():
-            control.SetFocus()
-
-    def _plain_control(self) -> Optional[wx.TextCtrl]:
-        """The box the text is shown in, when there is no web view."""
-        if self._text is not None:
-            return self._text
-        if self._webview is not None and not self._webview.using_webview:
-            return self._webview.fallback
-        return None
-
-    def _close(self) -> None:
-        """Ask the notebook owner to remove this page, by identity."""
-        if not self._closed:
-            self._on_close(self)
-
-    def _on_key(self, event: wx.KeyEvent) -> None:
-        if event.GetKeyCode() == wx.WXK_ESCAPE:
-            self._close()
-            return
-        event.Skip()
-
-    def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
-        # DeletePage destroys from C++; it need not call Python's Destroy.
-        if event.GetEventObject() is self:
-            self.mark_closed()
-        event.Skip()
-
-    def mark_closed(self) -> None:
-        self._closed = True
-        invalidate = getattr(self._webview, "invalidate", None)
-        if invalidate is not None:
-            invalidate()
-
-    def Destroy(self) -> bool:  # type: ignore[override]
-        self.mark_closed()
-        return super().Destroy()
 
 
 class MuseAiDialog(wx.Dialog):
