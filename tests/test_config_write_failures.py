@@ -31,6 +31,7 @@ import blindpilot_app as app
 import history_dialog
 import remote_hermes_dialog
 import app_config
+import app_shell
 
 
 @pytest.fixture
@@ -86,7 +87,7 @@ def test_finishing_the_wizard_when_it_cannot_be_saved_is_reported(unwritable, mo
     """Otherwise the only symptom is the whole wizard again next launch, and
     nothing connects that to a settings file nobody can write."""
     said: list[str] = []
-    monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(app_shell, "announce", lambda text, urgent=False: said.append(text))
 
     app._record_setup_complete({"setup_complete": True})
 
@@ -97,7 +98,7 @@ def test_finishing_the_wizard_when_it_cannot_be_saved_is_reported(unwritable, mo
 
 def test_a_saved_wizard_says_nothing(config_at, tmp_path, monkeypatch):
     said: list[str] = []
-    monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(app_shell, "announce", lambda text, urgent=False: said.append(text))
     config_at(tmp_path / "config.json")
 
     app._record_setup_complete({"setup_complete": True})
