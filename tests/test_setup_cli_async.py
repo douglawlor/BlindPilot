@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import setup_wizard  # noqa: E402
 
 wx = pytest.importorskip("wx")
 
@@ -24,16 +25,18 @@ def test_cli_check_runs_discovery_on_worker_and_fills_result(wx_app, monkeypatch
 
     monkeypatch.setattr(app.threading, "Thread", Thread)
     monkeypatch.setattr(
-        app, "_call_after_alive", lambda callback, *args: callbacks.append((callback, args))
+        setup_wizard,
+        "_call_after_alive",
+        lambda callback, *args: callbacks.append((callback, args)),
     )
-    monkeypatch.setattr(app, "announce", spoken.append)
+    monkeypatch.setattr(setup_wizard, "announce", spoken.append)
     monkeypatch.setattr(app.SetupWizard, "_find_selected_cli_for_backend", lambda _backend: None)
     monkeypatch.setattr(
         app.SetupWizard,
         "_selected_install_argv_for_backend",
         lambda _backend: ["installer"],
     )
-    monkeypatch.setattr(app, "_find_npm", lambda: None)
+    monkeypatch.setattr(setup_wizard, "_find_npm", lambda: None)
     wizard = app.SetupWizard(None)
     try:
         wizard._step = 1
@@ -69,9 +72,11 @@ def test_cli_check_error_is_spoken_and_can_be_retried(wx_app, monkeypatch):
 
     monkeypatch.setattr(app.threading, "Thread", Thread)
     monkeypatch.setattr(
-        app, "_call_after_alive", lambda callback, *args: callbacks.append((callback, args))
+        setup_wizard,
+        "_call_after_alive",
+        lambda callback, *args: callbacks.append((callback, args)),
     )
-    monkeypatch.setattr(app, "announce", spoken.append)
+    monkeypatch.setattr(setup_wizard, "announce", spoken.append)
 
     def fail(_backend):
         raise RuntimeError("CLI probe failed")
@@ -107,9 +112,11 @@ def test_cli_result_is_discarded_after_leaving_the_setup_step(wx_app, monkeypatc
 
     monkeypatch.setattr(app.threading, "Thread", Thread)
     monkeypatch.setattr(
-        app, "_call_after_alive", lambda callback, *args: callbacks.append((callback, args))
+        setup_wizard,
+        "_call_after_alive",
+        lambda callback, *args: callbacks.append((callback, args)),
     )
-    monkeypatch.setattr(app, "announce", lambda _message: None)
+    monkeypatch.setattr(setup_wizard, "announce", lambda _message: None)
     monkeypatch.setattr(app.SetupWizard, "_find_selected_cli_for_backend", lambda _backend: None)
     monkeypatch.setattr(
         app.SetupWizard,

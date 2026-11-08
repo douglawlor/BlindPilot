@@ -19,6 +19,7 @@ The wizard already knows the answer: every sign-in callback opens with
 from __future__ import annotations
 
 import blindpilot_app as app
+import setup_wizard  # noqa: E402
 
 
 class _Dead:
@@ -34,7 +35,7 @@ class _Dead:
 
 def _quiet(monkeypatch):
     said: list[str] = []
-    monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(setup_wizard, "announce", lambda text, urgent=False: said.append(text))
     return said
 
 
@@ -124,7 +125,9 @@ def test_the_sign_in_probe_runs_off_the_wizards_own_thread(monkeypatch):
 
     monkeypatch.setattr(app.threading, "Thread", _Thread)
     monkeypatch.setattr(app.wx, "CallAfter", lambda fn, *a: fn(*a))
-    monkeypatch.setattr(app, "backend_auth_ok", lambda backend: probed_on.append("probe") or True)
+    monkeypatch.setattr(
+        setup_wizard, "backend_auth_ok", lambda backend: probed_on.append("probe") or True
+    )
     wizard = _signin_wizard(monkeypatch)
 
     app.SetupWizard._check_signin(wizard)

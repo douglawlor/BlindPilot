@@ -731,10 +731,11 @@ class _WizardStub:
 
 def test_the_wizard_moves_on_when_the_terminal_sign_in_lands(monkeypatch):
     import blindpilot_app
+    import setup_wizard
 
     answers = iter([False, False, True])
-    monkeypatch.setattr(blindpilot_app, "backend_auth_ok", lambda _backend: next(answers))
-    monkeypatch.setattr(blindpilot_app, "_SIGN_IN_WATCH_INTERVAL", 0.0)
+    monkeypatch.setattr(setup_wizard, "backend_auth_ok", lambda _backend: next(answers))
+    monkeypatch.setattr(setup_wizard, "_SIGN_IN_WATCH_INTERVAL", 0.0)
     monkeypatch.setattr(blindpilot_app.wx, "CallAfter", lambda fn, *args: fn(*args))
     wizard = _WizardStub(BACKEND_ANTIGRAVITY, 2)
     blindpilot_app.SetupWizard._watch_for_sign_in(wizard, BACKEND_ANTIGRAVITY, 2)
@@ -743,6 +744,7 @@ def test_the_wizard_moves_on_when_the_terminal_sign_in_lands(monkeypatch):
 
 def test_the_watch_stops_when_the_wizard_leaves_the_step(monkeypatch):
     import blindpilot_app
+    import setup_wizard
 
     wizard = _WizardStub(BACKEND_GEMINI, 2)
 
@@ -750,8 +752,8 @@ def test_the_watch_stops_when_the_wizard_leaves_the_step(monkeypatch):
         wizard._step = 3  # the person chose Already Signed In meanwhile
         return False
 
-    monkeypatch.setattr(blindpilot_app, "backend_auth_ok", check)
-    monkeypatch.setattr(blindpilot_app, "_SIGN_IN_WATCH_INTERVAL", 0.0)
+    monkeypatch.setattr(setup_wizard, "backend_auth_ok", check)
+    monkeypatch.setattr(setup_wizard, "_SIGN_IN_WATCH_INTERVAL", 0.0)
     monkeypatch.setattr(blindpilot_app.wx, "CallAfter", lambda fn, *args: fn(*args))
     blindpilot_app.SetupWizard._watch_for_sign_in(wizard, BACKEND_GEMINI, 2)
     assert wizard.landed == []
