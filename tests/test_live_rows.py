@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import claude_worker  # noqa: E402
+import session_panel  # noqa: E402
 from blindpilot_app import _result_label, _tool_result_text, _tool_use_label  # noqa: E402
 from doubles import panel_stub  # noqa: E402
 from markdown_rows import Row, reassemble, reassemble_all  # noqa: E402
@@ -1265,7 +1266,7 @@ def test_a_block_already_shown_is_never_parsed_again(monkeypatch):
         seen.append(text)
         return real_parse(text, n)
 
-    monkeypatch.setattr(app, "parse_response", spy)
+    monkeypatch.setattr(session_panel, "parse_response", spy)
     panel = _streaming_panel(app, monkeypatch)
     answer = "# First heading\n\nBody of the first block, in words.\n\nSecond block.\n\nTail."
 

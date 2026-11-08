@@ -10,13 +10,16 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import session_panel
 from markdown_rows import Row
 
 
 @pytest.fixture
 def panel(monkeypatch):
     copied: list[str] = []
-    monkeypatch.setattr(app, "_copy_to_clipboard", lambda text: copied.append(text) or True)
+    monkeypatch.setattr(
+        session_panel, "_copy_to_clipboard", lambda text: copied.append(text) or True
+    )
     stub = type("PanelStub", (), {})()
     stub._rows = [
         Row(kind="code", label="a", payload="first", response_number=1, language="python"),

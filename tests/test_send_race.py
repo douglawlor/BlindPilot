@@ -15,6 +15,7 @@ last one's unfinished bookkeeping.
 from __future__ import annotations
 
 import blindpilot_app as app
+import session_panel
 from doubles import Prompt, panel_stub
 
 
@@ -136,11 +137,11 @@ def test_a_send_once_the_window_has_caught_up_is_allowed():
             started.append("started")
 
     # Substitute the worker class rather than launching a real backend.
-    real = app.worker_class
-    app.worker_class = lambda *_a, **_k: _Worker
+    real = session_panel.worker_class
+    session_panel.worker_class = lambda *_a, **_k: _Worker
     try:
         app.SessionPanel._on_send(panel)
     finally:
-        app.worker_class = real
+        session_panel.worker_class = real
 
     assert started == ["built", "started"], f"the next turn never started: {started}"

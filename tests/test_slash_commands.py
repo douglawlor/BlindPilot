@@ -24,6 +24,7 @@ from agent_backends import (
 )
 from blindpilot_app import SessionPanel, _slash_commands_for_backend
 import blindpilot_app as app
+import session_panel
 import commandcode_backend
 from doubles import Prompt, panel_stub
 import pytest
@@ -137,9 +138,7 @@ def test_status_says_a_permission_mode_the_backend_does_not_take_is_not_in_use()
 def test_muse_lists_the_skills_its_cli_offers(monkeypatch):
     """The picker shows whatever this directory's Muse has: bundled, user,
     and project skills, invoked the way the TUI invokes them."""
-    import blindpilot_app
-
-    monkeypatch.setattr(blindpilot_app, "muse_skills", lambda cwd: [("doctor", "Diagnose it.")])
+    monkeypatch.setattr(session_panel, "muse_skills", lambda cwd: [("doctor", "Diagnose it.")])
 
     commands = dict(_slash_commands_for_backend(BACKEND_MUSE, "/work"))
 
@@ -206,7 +205,7 @@ class _SlashDialog:
 def slash_dialog(monkeypatch):
     _SlashDialog.made.clear()
     _SlashDialog.actions.clear()
-    monkeypatch.setattr(app, "SlashCommandDialog", _SlashDialog)
+    monkeypatch.setattr(session_panel, "SlashCommandDialog", _SlashDialog)
     yield _SlashDialog
     _SlashDialog.made.clear()
     _SlashDialog.actions.clear()
@@ -258,7 +257,7 @@ def test_the_picker_opens_before_the_backend_probe_finishes(
         assert release.wait(5)
         return found
 
-    monkeypatch.setattr(app, "_slash_commands_for_backend", slow_probe)
+    monkeypatch.setattr(session_panel, "_slash_commands_for_backend", slow_probe)
     ui = _SlashUI(cwd)
 
     began = time.monotonic()
@@ -297,7 +296,7 @@ def test_an_open_picker_fills_with_the_worker_result(tmp_path, monkeypatch, wx_a
             time.sleep(0.01)
         return app.wx.ID_CANCEL
 
-    monkeypatch.setattr(app, "_slash_commands_for_backend", slow_probe)
+    monkeypatch.setattr(session_panel, "_slash_commands_for_backend", slow_probe)
     slash_dialog.actions.append(wait_for_fill)
     ui = _SlashUI(cwd)
 
@@ -316,7 +315,7 @@ def test_a_warm_backend_and_folder_opens_without_probing(
     found = [("/warm", "Warm result")]
     app.remember_slash_commands(BACKEND_CLAUDE, cwd, found)
     monkeypatch.setattr(
-        app,
+        session_panel,
         "_slash_commands_for_backend",
         lambda *_args, **_kwargs: pytest.fail("the warm list was discarded"),
     )
@@ -357,7 +356,7 @@ def test_refresh_discards_the_warm_list_and_asks_the_backend_again(
         probes.append(True)
         return fresh
 
-    monkeypatch.setattr(app, "_slash_commands_for_backend", probe)
+    monkeypatch.setattr(session_panel, "_slash_commands_for_backend", probe)
     slash_dialog.actions.extend(["refresh", app.wx.ID_CANCEL])
     ui = _SlashUI(cwd)
 

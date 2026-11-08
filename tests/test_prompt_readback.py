@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import session_panel
 from doubles import Prompt
 
 
@@ -41,7 +42,7 @@ class _Event:
 def panel(monkeypatch):
     said: list[str] = []
     timers: list[_Timer] = []
-    monkeypatch.setattr(app, "announce", lambda text, urgent=False: said.append(text))
+    monkeypatch.setattr(session_panel, "announce", lambda text, urgent=False: said.append(text))
     monkeypatch.setattr(
         app.wx, "CallLater", lambda ms, fn: timers.append(_Timer(ms, fn)) or timers[-1]
     )

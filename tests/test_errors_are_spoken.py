@@ -15,6 +15,7 @@ import re
 import pytest
 
 import blindpilot_app
+import session_panel
 from doubles import Prompt
 from blindpilot_app import SessionPanel
 from markdown_rows import Row
@@ -105,7 +106,7 @@ def test_stopping_with_nothing_running_says_so():
     ],
 )
 def test_a_copy_that_failed_is_as_audible_as_one_that_worked(call, monkeypatch):
-    monkeypatch.setattr(blindpilot_app, "_copy_to_clipboard", lambda _text: False)
+    monkeypatch.setattr(session_panel, "_copy_to_clipboard", lambda _text: False)
     row = _row()
     panel = _Panel(_displayed=[row], _rows=[row])
 

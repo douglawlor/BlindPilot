@@ -20,6 +20,7 @@ import urllib.request
 import pytest
 
 import blindpilot_app as app
+import session_panel
 from blocking_contract import BlockedTheGuiThread, drive, gui_thread_may_not_block, offences
 
 wx = pytest.importorskip("wx")
@@ -63,7 +64,7 @@ def test_work_inside_the_budget_is_not_recorded():
 
 def test_the_record_cannot_grow_without_limit(monkeypatch):
     """A stalled window files one entry per keystroke; the record is bounded."""
-    monkeypatch.setattr(app, "GUI_BUDGET_MS", -1.0)
+    monkeypatch.setattr(session_panel, "GUI_BUDGET_MS", -1.0)
     for _ in range(app._over_budget_work.maxlen + 25):
         app._gui_work("item", lambda: None)()
 

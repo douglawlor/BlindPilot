@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 import blindpilot_app as app
+import session_panel
 import history_dialog  # noqa: E402
 import remote_sessions as rs
 
@@ -121,8 +122,8 @@ def test_a_refused_remote_control_is_reported_and_off_is_never_sent_needlessly()
 
 def test_the_tab_remembers_where_its_remote_control_session_is(monkeypatch):
     saved: dict = {}
-    monkeypatch.setattr(app, "_load_config", lambda: dict(saved))
-    monkeypatch.setattr(app, "_save_config", lambda cfg: saved.update(cfg) or True)
+    monkeypatch.setattr(session_panel, "_load_config", lambda: dict(saved))
+    monkeypatch.setattr(session_panel, "_save_config", lambda cfg: saved.update(cfg) or True)
     spoken: list[str] = []
     stub = type("PanelStub", (), {})()
     stub._announce = lambda text, urgent=False: spoken.append(text)

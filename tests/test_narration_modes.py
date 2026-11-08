@@ -18,6 +18,7 @@ import pytest
 
 import app_config
 import blindpilot_app as app
+import session_panel
 from doubles import panel_stub
 
 
@@ -45,7 +46,7 @@ def _panel(monkeypatch, mode):
 @pytest.fixture(autouse=True)
 def _capture(monkeypatch):
     said: list[str] = []
-    monkeypatch.setattr(app, "announce", said.append)
+    monkeypatch.setattr(session_panel, "announce", said.append)
     return said
 
 

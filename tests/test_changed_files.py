@@ -19,6 +19,7 @@ import time
 import pytest
 
 import blindpilot_app as app
+import session_panel
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 
@@ -171,7 +172,7 @@ def test_changed_file_discovery_runs_on_a_worker(
         assert release.wait(5)
         return found
 
-    monkeypatch.setattr(app, "changed_files", slow_discovery)
+    monkeypatch.setattr(session_panel, "changed_files", slow_discovery)
     ui = _ChangedFilesUI(cwd)
 
     began = time.monotonic()
@@ -198,7 +199,7 @@ def test_a_warm_folder_opens_its_list_without_asking_git(
     found = (cwd, [("notes.txt", "notes.txt, new file", True)])
     app.remember_changed_files(cwd, found)
     calls = []
-    monkeypatch.setattr(app, "changed_files", lambda folder: calls.append(folder))
+    monkeypatch.setattr(session_panel, "changed_files", lambda folder: calls.append(folder))
     ui = _ChangedFilesUI(cwd)
 
     app.SessionPanel.open_changed_files(ui)
@@ -239,7 +240,7 @@ def test_refresh_discards_the_warm_list_and_asks_git_again(
         calls.append(folder)
         return fresh
 
-    monkeypatch.setattr(app, "changed_files", discover)
+    monkeypatch.setattr(session_panel, "changed_files", discover)
     changed_files_dialog.actions.append("refresh")
     ui = _ChangedFilesUI(cwd)
 
@@ -274,7 +275,7 @@ def test_a_git_failure_is_announced_without_opening_a_list(
         started.set()
         raise OSError("git could not start")
 
-    monkeypatch.setattr(app, "changed_files", fail)
+    monkeypatch.setattr(session_panel, "changed_files", fail)
     ui = _ChangedFilesUI(cwd)
 
     app.SessionPanel.open_changed_files(ui)
@@ -315,8 +316,8 @@ def test_opening_a_changed_file_reads_its_diff_on_a_worker(
         assert release.wait(5)
         return type("Result", (), {"stdout": "+updated\n"})()
 
-    monkeypatch.setattr(app, "_git", slow_diff)
-    monkeypatch.setattr(app, "ReadView", _ReadView)
+    monkeypatch.setattr(session_panel, "_git", slow_diff)
+    monkeypatch.setattr(session_panel, "ReadView", _ReadView)
     changed_files_dialog.actions.extend(["select", app.wx.ID_CANCEL])
     ui = _ChangedFilesUI(cwd)
 
@@ -335,7 +336,7 @@ def test_opening_a_changed_file_reads_its_diff_on_a_worker(
 
 def test_a_stale_file_read_does_not_open_a_view_or_replace_the_list(tmp_path, monkeypatch):
     views = []
-    monkeypatch.setattr(app, "ReadView", lambda *_args, **_kwargs: views.append(True))
+    monkeypatch.setattr(session_panel, "ReadView", lambda *_args, **_kwargs: views.append(True))
     ui = _ChangedFilesUI(str(tmp_path))
     ui._changed_files_serial = 2
 

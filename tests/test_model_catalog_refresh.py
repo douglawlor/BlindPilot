@@ -18,6 +18,7 @@ import pytest
 
 import app_config
 import blindpilot_app as app
+import session_panel
 
 wx = pytest.importorskip("wx")
 
@@ -146,9 +147,11 @@ def test_the_background_refresh_leaves_a_fresh_catalog_alone(monkeypatch):
     person set, it must not reach for the CLI at all."""
     panel = _Panel()
     monkeypatch.setattr(app.SETTINGS, "model_refresh_minutes", 15)
-    monkeypatch.setattr(app, "cached_model_options", lambda *_a, **_k: _options(["gpt-6-sol"]))
     monkeypatch.setattr(
-        app,
+        session_panel, "cached_model_options", lambda *_a, **_k: _options(["gpt-6-sol"])
+    )
+    monkeypatch.setattr(
+        session_panel,
         "probe_model_options",
         lambda *_a, **_k: pytest.fail("a fresh catalog must not be re-probed"),
     )
@@ -163,9 +166,9 @@ def test_a_setting_of_zero_turns_the_background_read_off(monkeypatch):
     who would rather not pay that sets it to 0."""
     panel = _Panel()
     monkeypatch.setattr(app.SETTINGS, "model_refresh_minutes", 0)
-    monkeypatch.setattr(app, "cached_model_options", lambda *_a, **_k: None)
+    monkeypatch.setattr(session_panel, "cached_model_options", lambda *_a, **_k: None)
     monkeypatch.setattr(
-        app,
+        session_panel,
         "probe_model_options",
         lambda *_a, **_k: pytest.fail("the refresh is off; nothing should be probed"),
     )
@@ -185,9 +188,9 @@ def test_the_background_refresh_probes_a_stale_catalog_and_announces(monkeypatch
         return _options(["gpt-6-sol"], current="gpt-6-sol")
 
     monkeypatch.setattr(app.SETTINGS, "model_refresh_minutes", 15)
-    monkeypatch.setattr(app, "cached_model_options", lambda *_a, **_k: None)
-    monkeypatch.setattr(app, "probe_model_options", probe)
-    monkeypatch.setattr(app, "threading", SimpleNamespace(Thread=_InstantThread))
+    monkeypatch.setattr(session_panel, "cached_model_options", lambda *_a, **_k: None)
+    monkeypatch.setattr(session_panel, "probe_model_options", probe)
+    monkeypatch.setattr(session_panel, "threading", SimpleNamespace(Thread=_InstantThread))
     monkeypatch.setattr(app.wx, "CallAfter", lambda fn, *args: fn(*args))
 
     app.SessionPanel.refresh_models_in_background(panel)
@@ -201,9 +204,11 @@ def test_a_second_tick_while_a_probe_is_out_does_not_stack_one(monkeypatch):
     panel = _Panel()
     panel._model_refresh_running = True
     monkeypatch.setattr(app.SETTINGS, "model_refresh_minutes", 15)
-    monkeypatch.setattr(app, "cached_model_options", lambda *_a, **_k: None)
+    monkeypatch.setattr(session_panel, "cached_model_options", lambda *_a, **_k: None)
     monkeypatch.setattr(
-        app, "probe_model_options", lambda *_a, **_k: pytest.fail("a probe is already out")
+        session_panel,
+        "probe_model_options",
+        lambda *_a, **_k: pytest.fail("a probe is already out"),
     )
 
     app.SessionPanel.refresh_models_in_background(panel)

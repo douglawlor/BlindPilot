@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import wx
 
 import blindpilot_app as app
+import session_panel
 from conversation_items import ConversationItemsDialog, collect_items, can_open_link
 from markdown_rows import parse_response, Row
 
@@ -142,7 +143,7 @@ def test_links_open_only_after_an_action_and_never_launch_copy_only_items(frame,
 
 def test_agent_scope_uses_each_original_message_once(monkeypatch):
     calls = []
-    monkeypatch.setattr(app, "_show_conversation_items", lambda *args: calls.append(args))
+    monkeypatch.setattr(session_panel, "_show_conversation_items", lambda *args: calls.append(args))
     rows = [Row("you", "You", "https://example.net", 1)]
     rows += parse_response("[Docs](https://example.com)\n```py\nanswer()\n```", 1)
     rows += parse_response("Another response", 2)
@@ -154,7 +155,7 @@ def test_agent_scope_uses_each_original_message_once(monkeypatch):
 def test_agent_browser_keeps_symbols_removed_from_spoken_rows(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        app,
+        session_panel,
         "_show_conversation_items",
         lambda _parent, messages, kind: calls.extend(collect_items(messages, kind)),
     )
@@ -166,7 +167,7 @@ def test_agent_browser_keeps_symbols_removed_from_spoken_rows(monkeypatch):
 def test_browser_can_read_the_current_stream_without_waiting_for_completion(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        app,
+        session_panel,
         "_show_conversation_items",
         lambda _parent, messages, kind: calls.extend(collect_items(messages, kind)),
     )
