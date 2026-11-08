@@ -19,6 +19,7 @@ import time
 import pytest
 
 import blindpilot_app as app
+import conversation_search
 import new_session_dialog
 from session_history import HistoryEntry, HistoryTurn
 
@@ -208,7 +209,9 @@ def test_all_conversation_search_returns_before_the_scan_finishes(search_ui, mon
 
     monkeypatch.setattr(app, "list_history", list_history)
     monkeypatch.setattr(
-        app, "load_turns", lambda entry: [HistoryTurn(prompt=f"{entry.title} needle")]
+        conversation_search,
+        "load_turns",
+        lambda entry: [HistoryTurn(prompt=f"{entry.title} needle")],
     )
 
     began = time.monotonic()
@@ -246,7 +249,7 @@ def test_cancelling_the_search_stops_the_scan_and_says_so(search_ui, monkeypatch
         return [HistoryTurn(prompt="needle")]
 
     monkeypatch.setattr(app, "list_history", list_history)
-    monkeypatch.setattr(app, "load_turns", load_turns)
+    monkeypatch.setattr(conversation_search, "load_turns", load_turns)
 
     app.MainFrame._find_in_all_conversations(search_ui)
     progress = _Progress.made[-1]
