@@ -9,6 +9,7 @@ import pytest
 import agent_backends
 import museai_backend as backend
 import blindpilot_app as app
+import museai_dialog  # noqa: E402
 
 
 def _wait(predicate):
@@ -201,7 +202,7 @@ def test_native_views_read_full_details_and_recent_approvals_cannot_be_decided(
 
 def test_view_read_errors_are_spoken_and_actions_disabled(frame, monkeypatch):
     spoken = []
-    monkeypatch.setattr(app, "announce", spoken.append)
+    monkeypatch.setattr(museai_dialog, "announce", spoken.append)
     monkeypatch.setattr(
         backend, "museai_items", lambda _view: (_ for _ in ()).throw(ValueError("Signed out"))
     )
@@ -236,7 +237,7 @@ def test_unreadable_approval_decision_is_spoken_without_sending(frame, gateway, 
         "recent_approvals": [],
     }
     spoken = []
-    monkeypatch.setattr(app, "announce", spoken.append)
+    monkeypatch.setattr(museai_dialog, "announce", spoken.append)
     dialog = app.MuseAiDialog(frame, "approvals")
     _loaded(dialog)
     try:

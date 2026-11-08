@@ -10,6 +10,7 @@ import pytest
 import agent_backends
 import museai_backend as backend
 import blindpilot_app as app
+import museai_dialog  # noqa: E402
 
 
 def _wait(predicate):
@@ -72,7 +73,7 @@ def test_read_action_returns_before_gateway_answers(frame, monkeypatch):
             return app.wx.ID_OK
 
     monkeypatch.setattr(backend, "museai_read_item", read)
-    monkeypatch.setattr(app, "ReadView", ReadView)
+    monkeypatch.setattr(museai_dialog, "ReadView", ReadView)
     dialog = app.MuseAiDialog(frame, "ideas")
     _loaded(dialog)
     try:
@@ -97,7 +98,7 @@ def test_failed_remote_action_is_spoken_and_keeps_dialog_open(frame, monkeypatch
         lambda _view, _item: (_ for _ in ()).throw(ValueError("Gateway unavailable")),
     )
     spoken = []
-    monkeypatch.setattr(app, "announce", spoken.append)
+    monkeypatch.setattr(museai_dialog, "announce", spoken.append)
     dialog = app.MuseAiDialog(frame, "ideas")
     _loaded(dialog)
     try:
